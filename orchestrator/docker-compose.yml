@@ -1,0 +1,72 @@
+version: '3.8'
+
+services:
+  # Scoring Engine MCP Server
+  scoring-mcp:
+    build:
+      context: ../../scoring-engine
+      dockerfile: Dockerfile.mcp
+    ports:
+      - "8000:8000"
+    environment:
+      - MCP_PORT=8000
+      - PYTHONUNBUFFERED=1
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - aicredits
+
+  # Agent Orchestrator
+  agent-orchestrator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8001:8001"
+    depends_on:
+      scoring-mcp:
+        condition: service_healthy
+    environment:
+      # App config
+      - APP_ENV=production
+      - DEBUG=false
+      - LOG_LEVEL=INFO
+      - SERVICE_PORT=8001
+      - SERVICE_HOST=0.0.0.0
+      
+      # Azure OpenAI
+      - AZURE_OPENAI_ENDPOINT=${AZURE_OPENAI_ENDPOINT}
+      - AZURE_OPENAI_KEY=${AZURE_OPENAI_KEY}
+      - AZURE_OPENAI_DEPLOYMENT=${AZURE_OPENAI_DEPLOYMENT:-gpt-5.4-mini}
+      - AZURE_OPENAI_API_VERSION=${AZURE_OPENAI_API_VERSION:-2025-01-01-preview}
+      
+      # MCP Integration
+      - MCP_HOST=scoring-mcp
+      - MCP_PORT=8000
+      - MCP_PROTOCOL=http
+      - MCP_TIMEOUT=30
+      
+      # Agent config
+      - MAX_RETRIES=3
+      - TIMEOUT_SECONDS=60
+      - MAX_TOOL_CALLS=20
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - aicredits
+    restart: unless-stopped
+
+networks:
+  aicredits:
+    driver: bridge
+
+# Utilisation:
+# 1. Créer .env avec les variables Azure OpenAI
+# 2. docker-compose up -d
+# 3. Vérifier: curl http://localhost:8001/health
