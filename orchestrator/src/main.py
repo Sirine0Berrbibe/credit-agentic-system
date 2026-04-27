@@ -32,11 +32,16 @@ try:
     from .agents.guarantee_agent.mcp_server.server import router as guarantee_agent_router
 except Exception:
     guarantee_agent_router = None
+try:
+    from .agents.policy_agent.mcp_server.server import router as policy_agent_router
+except Exception:
+    policy_agent_router = None
 from .orchestrator_api import setup_orchestrator_routes, api as langgraph_api
 from .infrastructure import InfrastructureManager, get_infra_manager, shutdown_infra
 from .agents.scoring_agent import ScoringAgent, FeatureStore
 from .state import CreditApplicationState, DEFAULT_STATE
 from .assistant_service import get_assistant_service, AssistantChatRequest, AssistantChatResponse
+from .llm_chat_service import get_llm_chat_service, ChatRequest, ChatResponse
 # Configuration logging
 logging.basicConfig(
     level=logging.INFO,
@@ -189,6 +194,8 @@ app.add_middleware(
 
 if guarantee_agent_router is not None:
     app.include_router(guarantee_agent_router)
+if policy_agent_router is not None:
+    app.include_router(policy_agent_router)
 else:
     logger.warning("Guarantee agent routes could not be loaded into the orchestrator app.")
 
@@ -358,6 +365,33 @@ async def assistant_chat(request: AssistantChatRequest) -> AssistantChatResponse
     except Exception as e:
         logger.error(f"Assistant chat error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Assistant error: {str(e)}")
+
+
+@app.post("/orchestrator/chat", response_model=ChatResponse)
+async def llm_chat(request: ChatRequest) -> ChatResponse:
+    """
+    LLM-powered chat endpoint for intelligent credit guidance
+    Uses Azure OpenAI to generate context-aware responses
+    Endpoint called by ai-gateway AssistantChatService
+    """
+    try:
+        request_id = str(uuid.uuid4())
+        logger.info(f"[{request_id}] LLM Chat - User: {request.userId}, Message: {request.message[:50]}...")
+
+        chat_service = get_llm_chat_service()
+        response = await chat_service.chat(request)
+
+        logger.info(f"[{request_id}] LLM response generated (status: {response.status})")
+        return response
+    except Exception as e:
+        logger.error(f"LLM chat error: {e}", exc_info=True)
+        # Return graceful error response
+        return ChatResponse(
+            message="Désolé, une erreur s'est produite. Veuillez réessayer." 
+            if "ROLE_CLIENT" in (request.userRole or "ROLE_CLIENT").upper()
+            else "An error occurred processing your request. Please try again.",
+            status="error"
+        )
 
 
 def build_test_state(request: AgentTestRequest) -> CreditApplicationState:

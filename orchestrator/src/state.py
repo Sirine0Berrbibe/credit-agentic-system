@@ -75,11 +75,18 @@ class FraudAnalysisResult(TypedDict):
 
 
 class CreditApplicationState(TypedDict):
+    # Identity
     application_id: str
     client_id: str
     created_at: str
     client_data: Dict[str, Any]
 
+    # Flux routing
+    flux_type: str          # "preview" | "full"
+    xai_mode: str           # "client" | "pro"
+    score_preview_cached: bool
+
+    # Guarantee / Documents
     documents: Dict[str, DocumentExtractionResult]
     documents_processed: bool
     missing_documents: List[str]
@@ -90,6 +97,7 @@ class CreditApplicationState(TypedDict):
     frontend_messages: List[str]
     frontend_payload: Dict[str, Any]
 
+    # Scoring
     scoring_iterations: List[ScoringIterationResult]
     final_pd_score: float
     pd_confidence: float
@@ -99,23 +107,32 @@ class CreditApplicationState(TypedDict):
     ml_model_version: str
     ml_latency_ms: float
 
+    # Policy
     policy_decision: PolicyDecisionResult
     regulatory_checks_passed: bool
     bct_rules_applied: List[str]
 
+    # XAI
     xai_explanation: XAIExplanationResult
     xai_latency_ms: float
 
+    # Fraud
     fraud_analysis: Optional[FraudAnalysisResult]
     fraud_check_completed: bool
     is_application_blocked: bool
 
+    # Human-in-the-loop
+    human_review_required: bool
+    human_review_reasons: List[str]
+
+    # Orchestrator metadata
     orchestrator_state: str
     processing_steps_completed: List[str]
     total_processing_time_ms: float
     error_messages: List[str]
     audit_trail: List[Dict[str, Any]]
 
+    # Final output
     final_decision: str
     decision_summary: str
     next_action: Optional[str]
@@ -126,6 +143,9 @@ DEFAULT_STATE: CreditApplicationState = {
     "client_id": "",
     "created_at": "",
     "client_data": {},
+    "flux_type": "full",
+    "xai_mode": "pro",
+    "score_preview_cached": False,
     "documents": {},
     "documents_processed": False,
     "missing_documents": [],
@@ -186,6 +206,8 @@ DEFAULT_STATE: CreditApplicationState = {
     "fraud_analysis": None,
     "fraud_check_completed": False,
     "is_application_blocked": False,
+    "human_review_required": False,
+    "human_review_reasons": [],
     "orchestrator_state": "INITIALIZED",
     "processing_steps_completed": [],
     "total_processing_time_ms": 0.0,
