@@ -10,6 +10,12 @@ import asyncio
 from dataclasses import dataclass
 
 from config.settings import AzureOpenAIConfig
+from src.langsmith_tracing import (
+    annotate_current_run,
+    process_trace_inputs,
+    process_trace_outputs,
+    traceable,
+)
 
 
 @dataclass
@@ -42,6 +48,12 @@ class AzureOpenAIClient:
         """Ferme le client HTTP"""
         await self.client.aclose()
 
+    @traceable(
+        name="Azure OpenAI Chat Completion",
+        run_type="llm",
+        process_inputs=process_trace_inputs,
+        process_outputs=process_trace_outputs,
+    )
     async def chat_completion(
         self,
         messages: List[Dict[str, str]],
@@ -53,6 +65,17 @@ class AzureOpenAIClient:
         """
         Appelle le modèle avec support des tools (function calling)
         """
+        annotate_current_run(
+            metadata={
+                "provider": "azure_openai",
+                "deployment": self.config.deployment,
+                "api_version": self.config.api_version,
+                "temperature": temperature,
+                "top_p": top_p,
+                "max_completion_tokens": max_completion_tokens,
+                "tool_count": len(tools or []),
+            }
+        )
         payload = {
             "messages": messages,
             "temperature": temperature,
@@ -84,6 +107,13 @@ class AzureOpenAIClient:
             tool_calls = None
             if "tool_calls" in message:
                 tool_calls = message["tool_calls"]
+
+            annotate_current_run(
+                metadata={
+                    "finish_reason": choice.get("finish_reason", "stop"),
+                    "usage": data.get("usage") or {},
+                }
+            )
 
             return LLMResponse(
                 content=message.get("content", ""),

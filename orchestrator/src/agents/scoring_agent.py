@@ -33,6 +33,14 @@ from src.state import (
     ScoringIterationResult,
 )
 from src.simplified_scoring import SimplifiedScoringEngine
+from src.langsmith_tracing import (
+    annotate_current_run,
+    build_trace_metadata,
+    build_trace_tags,
+    process_trace_inputs,
+    process_trace_outputs,
+    traceable,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -120,11 +128,29 @@ class ScoringAgent:
         self.feature_store = feature_store or FeatureStore()
         self.http_client = httpx.AsyncClient(timeout=10.0)
 
+    @traceable(
+        name="Scoring Agent",
+        run_type="tool",
+        process_inputs=process_trace_inputs,
+        process_outputs=process_trace_outputs,
+    )
     async def process(self, state: CreditApplicationState) -> CreditApplicationState:
         """
         Main entry point du Scoring Agent
         Implémente la boucle ReAct
         """
+        annotate_current_run(
+            metadata=build_trace_metadata(
+                service="aicredits-orchestrator",
+                component="agent",
+                operation="scoring",
+                application_id=state.get("application_id"),
+                client_id=state.get("client_id"),
+                flux_type=state.get("flux_type"),
+                extra={"max_iterations": self.MAX_ITERATIONS},
+            ),
+            tags=build_trace_tags("agent", "scoring", state.get("flux_type")),
+        )
         logger.info(
             f"[SCORING_B] Starting ReAct loop for application {state['application_id']}"
         )
@@ -237,6 +263,12 @@ class ScoringAgent:
 
         return state
 
+    @traceable(
+        name="ML Server Predict",
+        run_type="tool",
+        process_inputs=process_trace_inputs,
+        process_outputs=process_trace_outputs,
+    )
     async def _call_ml_server(self, enriched_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
         Appel HTTP au ML Server (mcp_server /predict)
@@ -247,6 +279,13 @@ class ScoringAgent:
         - Server returns an error
         - Server indicates insufficient features (< 10% of total required)
         """
+        annotate_current_run(
+            metadata={
+                "ml_server_url": self.ML_SERVER_URL,
+                "feature_count": len(enriched_data or {}),
+            },
+            tags=build_trace_tags("ml-server", "predict"),
+        )
         try:
             payload = {"client_data": enriched_data}
 

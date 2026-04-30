@@ -3,577 +3,723 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AICredits - Décisions de Crédit</title>
+    <title>AICredits — Système de Décision de Crédit Agentic</title>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-        
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
         body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
             min-height: 100vh;
-            padding: 20px;
+            color: #e0e0e0;
         }
-        
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-        }
-        
+
+        .app-container { max-width: 1300px; margin: 0 auto; padding: 20px; }
+
         header {
             text-align: center;
-            color: white;
-            margin-bottom: 30px;
+            padding: 30px 0 20px;
         }
-        
-        h1 {
-            font-size: 2.5em;
-            margin-bottom: 10px;
+        header h1 { font-size: 2.2em; color: #e2c4ff; letter-spacing: 1px; }
+        header .subtitle { color: #8899aa; margin-top: 6px; font-size: 0.95em; }
+
+        /* ── TABS ── */
+        .tab-bar {
+            display: flex;
+            gap: 0;
+            border-bottom: 2px solid #2a3a5a;
+            margin-bottom: 24px;
         }
-        
-        .subtitle {
-            font-size: 1.1em;
-            opacity: 0.9;
+        .tab-btn {
+            padding: 12px 28px;
+            border: none;
+            background: transparent;
+            color: #8899aa;
+            font-size: 0.95em;
+            font-weight: 600;
+            cursor: pointer;
+            border-bottom: 3px solid transparent;
+            margin-bottom: -2px;
+            transition: all 0.2s;
         }
-        
+        .tab-btn:hover { color: #c4b5fd; }
+        .tab-btn.active { color: #c4b5fd; border-bottom-color: #c4b5fd; background: rgba(196,181,253,0.06); }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+
+        .badge {
+            display: inline-block;
+            font-size: 0.72em;
+            padding: 2px 7px;
+            border-radius: 10px;
+            margin-left: 8px;
+            font-weight: 700;
+            vertical-align: middle;
+        }
+        .badge-a { background: #1a4a2a; color: #4ade80; }
+        .badge-b { background: #3a1a4a; color: #c084fc; }
+
+        /* ── LAYOUT ── */
         .main-layout {
             display: grid;
             grid-template-columns: 1fr 1fr;
             gap: 20px;
-            margin-top: 20px;
         }
-        
+
         .card {
-            background: white;
-            border-radius: 10px;
-            padding: 25px;
-            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+            background: rgba(255,255,255,0.06);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255,255,255,0.12);
+            border-radius: 14px;
+            padding: 24px;
             overflow-y: auto;
+            max-height: 85vh;
         }
-        
-        .card h2 {
-            color: #667eea;
-            margin-bottom: 20px;
-            font-size: 1.5em;
-            border-bottom: 2px solid #667eea;
-            padding-bottom: 10px;
-        }
-        
-        .form-group {
-            margin-bottom: 15px;
-        }
-        
-        label {
-            display: block;
-            margin-bottom: 5px;
-            color: #333;
-            font-weight: 500;
-        }
-        
-        input[type="text"],
-        input[type="number"],
-        select {
+        .card h2 { font-size: 1.05em; color: #c4b5fd; margin-bottom: 20px; letter-spacing: 0.5px; }
+
+        .form-group { margin-bottom: 14px; }
+        .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+        label { display: block; font-size: 0.82em; color: #9aacbc; margin-bottom: 5px; }
+
+        input, select {
             width: 100%;
-            padding: 10px;
-            border: 1px solid #ddd;
-            border-radius: 5px;
-            font-size: 1em;
-            transition: border-color 0.3s;
+            padding: 9px 12px;
+            background: rgba(255,255,255,0.07);
+            border: 1px solid rgba(255,255,255,0.15);
+            border-radius: 8px;
+            color: #e0e0e0;
+            font-size: 0.9em;
+            transition: border-color 0.2s;
         }
-        
-        input[type="text"]:focus,
-        input[type="number"]:focus,
-        select:focus {
-            outline: none;
-            border-color: #667eea;
-            box-shadow: 0 0 5px rgba(102, 126, 234, 0.3);
+        input:focus, select:focus { outline: none; border-color: #c4b5fd; }
+        select option { background: #1a1a2e; }
+
+        .btn-group { display: flex; gap: 10px; margin-top: 18px; }
+        button[type="submit"] {
+            flex: 1;
+            padding: 11px;
+            background: linear-gradient(135deg, #7c3aed, #4f46e5);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-weight: 700;
+            font-size: 0.95em;
+            cursor: pointer;
+            transition: all 0.2s;
         }
-        
-        .form-row {
+        button[type="submit"]:hover { transform: translateY(-1px); box-shadow: 0 4px 15px rgba(124,58,237,0.4); }
+        button[type="submit"]:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+        button[type="reset"] {
+            padding: 11px 18px;
+            background: rgba(255,255,255,0.08);
+            color: #aaa;
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 0.9em;
+        }
+
+        /* ── LOADER ── */
+        .loading { display: none; text-align: center; padding: 30px; color: #8899aa; }
+        .spinner {
+            border: 3px solid rgba(255,255,255,0.1);
+            border-top: 3px solid #c4b5fd;
+            border-radius: 50%;
+            width: 38px; height: 38px;
+            animation: spin 0.9s linear infinite;
+            margin: 0 auto 12px;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* ── RESULTS ── */
+        .result { display: none; animation: fadeIn 0.3s ease; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
+        .decision-box {
+            padding: 18px 20px;
+            border-radius: 10px;
+            margin-bottom: 16px;
+            font-weight: 700;
+            font-size: 1.1em;
+            text-align: center;
+        }
+        .d-approve  { background: linear-gradient(135deg, #065f46, #059669); color: #d1fae5; }
+        .d-reject   { background: linear-gradient(135deg, #7f1d1d, #dc2626); color: #fee2e2; }
+        .d-review   { background: linear-gradient(135deg, #78350f, #d97706); color: #fef3c7; }
+        .d-blocked  { background: linear-gradient(135deg, #1e1b4b, #7c3aed); color: #ede9fe; }
+        .d-error    { background: rgba(255,255,255,0.07); color: #aaa; }
+
+        /* Preview status */
+        .status-favorable  { background: linear-gradient(135deg, #065f46, #059669); color: #d1fae5; }
+        .status-approfondie{ background: linear-gradient(135deg, #78350f, #d97706); color: #fef3c7; }
+        .status-defavorable{ background: linear-gradient(135deg, #7f1d1d, #dc2626); color: #fee2e2; }
+
+        .metrics-grid {
             display: grid;
             grid-template-columns: 1fr 1fr;
-            gap: 15px;
+            gap: 10px;
+            margin-bottom: 16px;
         }
-        
-        .checkbox-group {
+        .metric {
+            background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 8px;
+            padding: 12px 14px;
+        }
+        .metric-label { font-size: 0.75em; color: #6b7fa3; margin-bottom: 4px; }
+        .metric-value { font-size: 1.15em; font-weight: 700; color: #e0e0e0; }
+
+        .section { margin-top: 16px; }
+        .section-title { font-size: 0.8em; font-weight: 700; color: #7c8db0; text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 8px; }
+
+        .item {
+            background: rgba(255,255,255,0.04);
+            border-left: 3px solid #7c3aed;
+            border-radius: 0 6px 6px 0;
+            padding: 8px 12px;
+            margin-bottom: 6px;
+            font-size: 0.85em;
+        }
+        .item.warning { border-color: #d97706; }
+        .item.danger  { border-color: #dc2626; }
+        .item.success { border-color: #059669; }
+
+        .shap-bar {
             display: flex;
             align-items: center;
-            gap: 10px;
+            gap: 8px;
+            margin-bottom: 6px;
+            font-size: 0.82em;
         }
-        
-        input[type="checkbox"] {
-            width: 18px;
-            height: 18px;
-            cursor: pointer;
-        }
-        
-        .button-group {
-            display: flex;
-            gap: 10px;
-            margin-top: 20px;
-        }
-        
-        button {
-            flex: 1;
-            padding: 12px 20px;
-            border: none;
-            border-radius: 5px;
-            font-size: 1em;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        
-        .btn-submit {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-        }
-        
-        .btn-submit:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
-        }
-        
-        .btn-submit:disabled {
-            opacity: 0.6;
-            cursor: not-allowed;
-            transform: none;
-        }
-        
-        .btn-reset {
-            background: #f0f0f0;
-            color: #333;
-        }
-        
-        .btn-reset:hover {
-            background: #e0e0e0;
-        }
-        
-        .loading {
-            display: none;
-            text-align: center;
-            padding: 20px;
-        }
-        
-        .spinner {
-            border: 4px solid #f3f3f3;
-            border-top: 4px solid #667eea;
-            border-radius: 50%;
-            width: 40px;
-            height: 40px;
-            animation: spin 1s linear infinite;
-            margin: 0 auto 10px;
-        }
-        
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-        
-        .result {
-            margin-top: 20px;
-            display: none;
-        }
-        
-        .decision-box {
-            padding: 20px;
+        .shap-name { width: 140px; color: #a0b4c8; flex-shrink: 0; }
+        .shap-track { flex: 1; background: rgba(255,255,255,0.07); border-radius: 4px; height: 8px; }
+        .shap-fill { height: 8px; border-radius: 4px; }
+        .shap-up   { background: linear-gradient(90deg, #dc2626, #f87171); }
+        .shap-down { background: linear-gradient(90deg, #059669, #34d399); }
+        .shap-val  { width: 50px; text-align: right; color: #6b7fa3; }
+
+        .alert-human {
+            background: rgba(245,158,11,0.15);
+            border: 1px solid rgba(245,158,11,0.4);
             border-radius: 8px;
-            margin-bottom: 15px;
-            color: white;
-            font-weight: bold;
-            text-align: center;
-            font-size: 1.3em;
+            padding: 12px 14px;
+            margin-bottom: 14px;
+            font-size: 0.85em;
+            color: #fcd34d;
         }
-        
-        .decision-approved {
-            background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
-        }
-        
-        .decision-rejected {
-            background: linear-gradient(135deg, #eb3349 0%, #f45c43 100%);
-        }
-        
-        .decision-review {
-            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
-        }
-        
-        .metrics {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 15px;
-            margin-bottom: 15px;
-        }
-        
-        .metric {
-            background: #f8f9fa;
-            padding: 15px;
+        .alert-fraud {
+            background: rgba(124,58,237,0.15);
+            border: 1px solid rgba(124,58,237,0.4);
             border-radius: 8px;
-            border-left: 4px solid #667eea;
+            padding: 12px 14px;
+            margin-bottom: 14px;
+            font-size: 0.85em;
+            color: #c4b5fd;
         }
-        
-        .metric-label {
-            color: #666;
-            font-size: 0.9em;
-            margin-bottom: 5px;
-        }
-        
-        .metric-value {
-            color: #333;
-            font-size: 1.3em;
-            font-weight: bold;
-        }
-        
-        .analysis-section {
-            margin-top: 15px;
-        }
-        
-        .analysis-section h4 {
-            color: #667eea;
-            margin-bottom: 10px;
-            font-size: 1em;
-        }
-        
-        .analysis-item {
-            background: #f8f9fa;
-            padding: 10px;
-            margin-bottom: 8px;
-            border-radius: 5px;
-            border-left: 3px solid #667eea;
-            font-size: 0.9em;
-        }
-        
-        .recommendations {
-            background: #fff3cd;
-            padding: 15px;
-            border-radius: 8px;
-            border-left: 4px solid #ffc107;
-            margin-top: 15px;
-        }
-        
-        .recommendations h4 {
-            color: #856404;
+        .alert-cached {
+            font-size: 0.75em;
+            background: rgba(16,185,129,0.12);
+            border: 1px solid rgba(16,185,129,0.25);
+            border-radius: 6px;
+            padding: 5px 10px;
+            color: #6ee7b7;
+            display: inline-block;
             margin-bottom: 10px;
         }
-        
-        .recommendations ul {
-            list-style-position: inside;
-            color: #856404;
-        }
-        
-        .recommendations li {
-            margin-bottom: 5px;
-        }
-        
-        .error {
-            background: #f8d7da;
-            color: #721c24;
-            padding: 15px;
+
+        .meta { font-size: 0.75em; color: #4a5568; margin-top: 12px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.05); }
+
+        .placeholder { text-align: center; color: #4a5568; padding: 50px 20px; }
+        .placeholder-icon { font-size: 2.5em; margin-bottom: 10px; }
+
+        .error-box {
+            background: rgba(220,38,38,0.15);
+            border: 1px solid rgba(220,38,38,0.3);
             border-radius: 8px;
-            border: 1px solid #f5c6cb;
-            margin-top: 15px;
+            padding: 12px;
+            color: #fca5a5;
+            margin-top: 12px;
+            font-size: 0.85em;
             display: none;
         }
-        
-        .success-icon::before {
-            content: "✓ ";
-            color: #28a745;
-            font-weight: bold;
-            margin-right: 5px;
-        }
-        
-        @media (max-width: 1024px) {
-            .main-layout {
-                grid-template-columns: 1fr;
-            }
-            
-            h1 {
-                font-size: 1.8em;
-            }
-        }
-        
-        .card {
-            max-height: 80vh;
+
+        @media (max-width: 900px) {
+            .main-layout { grid-template-columns: 1fr; }
+            .metrics-grid { grid-template-columns: 1fr 1fr; }
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <header>
-            <h1>🏦 AICredits</h1>
-            <p class="subtitle">Système de Décision de Crédit Agentic</p>
-        </header>
-        
+<div class="app-container">
+    <header>
+        <h1>🏦 AICredits</h1>
+        <p class="subtitle">Plateforme de décision de crédit agentic — Tunisie</p>
+    </header>
+
+    <!-- ════ TABS ════ -->
+    <div class="tab-bar">
+        <button class="tab-btn active" onclick="switchTab('preview')">
+            Simulation Rapide <span class="badge badge-a">Flux A</span>
+        </button>
+        <button class="tab-btn" onclick="switchTab('decision')">
+            Décision Officielle <span class="badge badge-b">Flux B</span>
+        </button>
+    </div>
+
+    <!-- ════ FLUX A — PREVIEW ════ -->
+    <div id="tab-preview" class="tab-content active">
         <div class="main-layout">
-            <!-- FORM PANEL -->
+            <!-- FORM A -->
             <div class="card">
-                <h2>📋 Données du Client</h2>
-                
-                <form id="creditForm">
+                <h2>📋 Simulation avant soumission</h2>
+                <p style="font-size:0.8em;color:#6b7fa3;margin-bottom:16px;">
+                    Obtenez une estimation rapide sans soumettre de dossier officiel.
+                    Aucun frais, aucun impact sur votre score Centrale des Risques.
+                </p>
+                <form id="previewForm">
                     <div class="form-group">
-                        <label for="clientId">ID Client</label>
-                        <input type="text" id="clientId" value="CLI_TEST_001" required>
+                        <label>ID Client</label>
+                        <input type="text" id="p_clientId" value="CLI_PREVIEW_001" required>
                     </div>
-                    
                     <div class="form-row">
                         <div class="form-group">
-                            <label for="age">Âge (ans)</label>
-                            <input type="number" id="age" value="35" min="18" max="100" required>
-                        </div>
-                        <div class="form-group">
-                            <label for="income">Revenu (€/mois)</label>
-                            <input type="number" id="income" value="55000" min="0" required>
-                        </div>
-                    </div>
-                    
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="expenses">Dépenses (€/mois)</label>
-                            <input type="number" id="expenses" value="25000" min="0" required>
-                        </div>
-                        <div class="form-group">
-                            <label for="loanAmount">Demande Crédit (€)</label>
-                            <input type="number" id="loanAmount" value="20000" min="0" required>
-                        </div>
-                    </div>
-                    
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="loanTerm">Durée Crédit (mois)</label>
-                            <input type="number" id="loanTerm" value="60" min="1" max="360" required>
-                        </div>
-                        <div class="form-group">
-                            <label for="employment">Type d'Emploi</label>
-                            <select id="employment" required>
-                                <option value="permanent">CDI</option>
-                                <option value="fixed_term">CDD</option>
-                                <option value="self_employed">Indépendant</option>
-                                <option value="unemployed">Sans emploi</option>
+                            <label>Type de crédit</label>
+                            <select id="p_creditType">
+                                <option value="consommation">Consommation</option>
+                                <option value="auto">Auto</option>
+                                <option value="immobilier">Immobilier</option>
+                                <option value="professionnel">Professionnel</option>
                             </select>
                         </div>
+                        <div class="form-group">
+                            <label>Montant demandé (TND)</label>
+                            <input type="number" id="p_loanAmount" value="20000" min="1000" required>
+                        </div>
                     </div>
-                    
-                    <div class="form-group">
-                        <label for="purpose">Objet du Crédit</label>
-                        <input type="text" id="purpose" value="consolidation" placeholder="ex: consolidation, achat, travaux">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Revenu mensuel net (TND)</label>
+                            <input type="number" id="p_income" value="2200" min="100" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Âge (ans)</label>
+                            <input type="number" id="p_age" value="34" min="18" max="99" required>
+                        </div>
                     </div>
-                    
-                    <div class="form-group checkbox-group">
-                        <input type="checkbox" id="hasCredit" checked>
-                        <label for="hasCredit" style="margin-bottom: 0;">Historique de crédit positif</label>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Statut professionnel</label>
+                            <select id="p_employment">
+                                <option value="salarie_public">Salarié secteur public</option>
+                                <option value="salarie_prive" selected>Salarié secteur privé</option>
+                                <option value="independant">Indépendant / Libéral</option>
+                                <option value="retraite">Retraité</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Charges mensuelles (TND)</label>
+                            <input type="number" id="p_charges" value="500" min="0">
+                        </div>
                     </div>
-                    
-                    <div class="form-group">
-                        <label for="decisionType">Type d'Analyse</label>
-                        <select id="decisionType" required>
-                            <option value="full_assessment">Complète (Analyzer + Scorer + Risk)</option>
-                            <option value="quick_score">Rapide (Score seulement)</option>
-                            <option value="risk_only">Risques (Risk assessment seulement)</option>
-                        </select>
-                    </div>
-                    
-                    <div class="button-group">
-                        <button type="submit" class="btn-submit">
-                            📤 Soumettre la Demande
-                        </button>
-                        <button type="reset" class="btn-reset">
-                            🔄 Réinitialiser
-                        </button>
+                    <div class="btn-group">
+                        <button type="submit">🔍 Simuler mon score</button>
+                        <button type="reset">↺</button>
                     </div>
                 </form>
-                
-                <div class="loading" id="loading">
+                <div class="loading" id="p_loading">
                     <div class="spinner"></div>
-                    <p>Traitement en cours...</p>
+                    <p>Simulation en cours...</p>
                 </div>
-                
-                <div class="error" id="error"></div>
+                <div class="error-box" id="p_error"></div>
             </div>
-            
-            <!-- RESULTS PANEL -->
+
+            <!-- RESULT A -->
             <div class="card">
-                <h2>📊 Résultats de la Décision</h2>
-                
-                <div class="result" id="result">
-                    <div id="decisionBox"></div>
-                    
-                    <div class="metrics">
-                        <div class="metric">
-                            <div class="metric-label">Score ML</div>
-                            <div class="metric-value" id="scoreValue">-</div>
-                        </div>
-                        <div class="metric">
-                            <div class="metric-label">Confiance</div>
-                            <div class="metric-value" id="confidenceValue">-</div>
-                        </div>
-                        <div class="metric">
-                            <div class="metric-label">Niveau de Risque</div>
-                            <div class="metric-value" id="riskValue">-</div>
-                        </div>
-                        <div class="metric">
-                            <div class="metric-label">Révision Humaine</div>
-                            <div class="metric-value" id="reviewValue">-</div>
-                        </div>
-                    </div>
-                    
-                    <div class="analysis-section">
-                        <h4>🔍 Analyse Détaillée</h4>
-                        <div id="analysisDetails"></div>
-                    </div>
-                    
-                    <div class="recommendations" id="recommendationsBox">
-                        <h4>💡 Recommandations</h4>
-                        <ul id="recommendationsList"></ul>
-                    </div>
-                    
-                    <div style="margin-top: 15px; padding: 10px; background: #f0f0f0; border-radius: 5px; font-size: 0.85em; color: #666;">
-                        <strong>Temps de traitement:</strong> <span id="processingTime">-</span>
-                    </div>
-                </div>
-                
-                <div style="text-align: center; color: #999; margin-top: 40px;" id="placeholder">
-                    Remplissez le formulaire et soumettez pour voir les résultats ici
+                <h2>📊 Résultat de la simulation</h2>
+                <div class="result" id="p_result"></div>
+                <div class="placeholder" id="p_placeholder">
+                    <div class="placeholder-icon">💡</div>
+                    <p>Remplissez le formulaire et cliquez sur<br><strong>Simuler mon score</strong></p>
                 </div>
             </div>
         </div>
     </div>
-    
-    <script>
-        const API_URL = 'http://localhost:8001';
-        
-        document.getElementById('creditForm').addEventListener('submit', async (e) => {
-            e.preventDefault();
-            
-            const startTime = Date.now();
-            
-            // Collecte les données du formulaire
-            const formData = {
-                client_id: document.getElementById('clientId').value,
-                client_data: {
-                    age: parseInt(document.getElementById('age').value),
-                    income: parseInt(document.getElementById('income').value),
-                    expenses: parseInt(document.getElementById('expenses').value),
-                    employment_type: document.getElementById('employment').value,
-                    has_credit_history: document.getElementById('hasCredit').checked,
-                    loan_amount: parseInt(document.getElementById('loanAmount').value),
-                    loan_term_months: parseInt(document.getElementById('loanTerm').value),
-                    purpose: document.getElementById('purpose').value,
-                },
-                decision_type: document.getElementById('decisionType').value,
-                priority: 'normal'
-            };
-            
-            // Affiche le spinner
-            document.getElementById('loading').style.display = 'block';
-            document.getElementById('result').style.display = 'none';
-            document.getElementById('error').style.display = 'none';
-            document.getElementById('placeholder').style.display = 'none';
-            
-            try {
-                const response = await fetch(`${API_URL}/credit/decision`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify(formData)
-                });
-                
-                const endTime = Date.now();
-                const processingTime = ((endTime - startTime) / 1000).toFixed(1);
-                
-                if (!response.ok) {
-                    throw new Error(`Erreur ${response.status}: ${response.statusText}`);
-                }
-                
-                const data = await response.json();
-                
-                console.group('Guarantee Agent Result');
-                console.log('guarantee_ready_for_scoring:', data.guarantee_ready_for_scoring);
-                console.log('missing_documents:', data.missing_documents);
-                console.log('document_issues:', data.document_issues);
-                console.log('frontend_messages:', data.frontend_messages);
-                console.log('frontend_payload:', data.frontend_payload);
-                console.groupEnd();
-                
-                // Affiche les résultats
-                displayResults(data, processingTime);
-                
-            } catch (error) {
-                console.error('Erreur:', error);
-                showError(`Erreur lors de la requête: ${error.message}`);
-            } finally {
-                document.getElementById('loading').style.display = 'none';
-            }
+
+    <!-- ════ FLUX B — DECISION ════ -->
+    <div id="tab-decision" class="tab-content">
+        <div class="main-layout">
+            <!-- FORM B -->
+            <div class="card">
+                <h2>📋 Demande officielle de crédit</h2>
+                <p style="font-size:0.8em;color:#6b7fa3;margin-bottom:16px;">
+                    Analyse complète avec policy BCT, détection de fraude et explication SHAP.
+                    Réservé aux conseillers et administrateurs.
+                </p>
+                <form id="decisionForm">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>ID Client</label>
+                            <input type="text" id="d_clientId" value="CLI_FULL_001" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Type de crédit</label>
+                            <select id="d_creditType">
+                                <option value="consommation">Consommation</option>
+                                <option value="auto" selected>Auto</option>
+                                <option value="immobilier">Immobilier</option>
+                                <option value="professionnel">Professionnel</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Montant crédit (TND)</label>
+                            <input type="number" id="d_loanAmount" value="40000" min="1000" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Mensualité estimée (TND)</label>
+                            <input type="number" id="d_monthly" value="650" min="0">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Revenu mensuel net (TND)</label>
+                            <input type="number" id="d_income" value="2500" min="100" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Âge (ans)</label>
+                            <input type="number" id="d_age" value="35" min="18" max="99" required>
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Statut professionnel</label>
+                            <select id="d_employment">
+                                <option value="salarie_public">Salarié public</option>
+                                <option value="salarie_prive" selected>Salarié privé</option>
+                                <option value="independant">Indépendant</option>
+                                <option value="retraite">Retraité</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Ancienneté emploi (ans)</label>
+                            <input type="number" id="d_seniority" value="4" min="0">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Classe CR-BCT (0–5)</label>
+                            <select id="d_crClass">
+                                <option value="0" selected>0 — Aucun crédit</option>
+                                <option value="1">1 — Remboursement normal</option>
+                                <option value="2">2 — Surveillance</option>
+                                <option value="3">3 — Incertain (REJECT)</option>
+                                <option value="4">4 — Préoccupant (REJECT)</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Durée crédit (mois)</label>
+                            <input type="number" id="d_duration" value="60" min="6" max="360">
+                        </div>
+                    </div>
+                    <div class="form-group" style="display:flex;align-items:center;gap:10px;">
+                        <input type="checkbox" id="d_sanctions" style="width:18px;height:18px;">
+                        <label style="margin:0;color:#f87171;">Présent sur liste de sanctions</label>
+                    </div>
+                    <div class="btn-group">
+                        <button type="submit">📤 Soumettre la demande</button>
+                        <button type="reset">↺</button>
+                    </div>
+                </form>
+                <div class="loading" id="d_loading">
+                    <div class="spinner"></div>
+                    <p>Analyse complète en cours (guarantee → scoring → policy → XAI + fraud)...</p>
+                </div>
+                <div class="error-box" id="d_error"></div>
+            </div>
+
+            <!-- RESULT B -->
+            <div class="card">
+                <h2>📊 Décision complète — Vue conseiller</h2>
+                <div class="result" id="d_result"></div>
+                <div class="placeholder" id="d_placeholder">
+                    <div class="placeholder-icon">🔬</div>
+                    <p>Soumettez une demande pour voir<br>l'analyse complète multi-agents</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+const API = 'http://localhost:8001';
+
+// ── Tab switching ─────────────────────────────────────────────
+function switchTab(tab) {
+    document.querySelectorAll('.tab-btn').forEach((b, i) => b.classList.toggle('active', ['preview','decision'][i] === tab));
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    document.getElementById('tab-' + tab).classList.add('active');
+}
+
+// ── Helpers ───────────────────────────────────────────────────
+function fmt(v, decimals=1) { return typeof v === 'number' ? v.toFixed(decimals) : '—'; }
+function pct(v) { return typeof v === 'number' ? (v*100).toFixed(1)+'%' : '—'; }
+
+function showLoad(id, show) {
+    document.getElementById(id+'_loading').style.display = show ? 'block' : 'none';
+}
+function showError(id, msg) {
+    const el = document.getElementById(id+'_error');
+    el.textContent = msg;
+    el.style.display = 'block';
+}
+function clearError(id) {
+    const el = document.getElementById(id+'_error');
+    el.style.display = 'none';
+    el.textContent = '';
+}
+
+// ── FLUX A — Preview ──────────────────────────────────────────
+document.getElementById('previewForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    clearError('p');
+    showLoad('p', true);
+    document.getElementById('p_result').style.display = 'none';
+    document.getElementById('p_placeholder').style.display = 'none';
+
+    const income = parseInt(document.getElementById('p_income').value);
+    const monthly = parseInt(document.getElementById('p_charges').value);
+    const loan = parseInt(document.getElementById('p_loanAmount').value);
+    const age = parseInt(document.getElementById('p_age').value);
+
+    const payload = {
+        client_id: document.getElementById('p_clientId').value,
+        client_data: {
+            credit_type: document.getElementById('p_creditType').value,
+            loan_amount: loan,
+            monthly_salary: income,
+            monthly_payment: monthly,
+            client_age: age,
+            employment_status: document.getElementById('p_employment').value,
+            debt_ratio: income > 0 ? monthly / income : 0,
+            AMT_INCOME_TOTAL: income * 12,
+            AMT_CREDIT: loan,
+            AMT_ANNUITY: monthly,
+            DAYS_BIRTH: -Math.round(age * 365.25),
+            document_workflow_enabled: false,
+        }
+    };
+
+    try {
+        const t0 = Date.now();
+        const res = await fetch(`${API}/credit/preview`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload)
         });
-        
-        function displayResults(data, processingTime) {
-            // Décision
-            const decisionMap = {
-                'approved': { text: '✓ APPROUVÉ', class: 'decision-approved' },
-                'rejected': { text: '✗ REJETÉ', class: 'decision-rejected' },
-                'review_required': { text: '⚠️  RÉVISION REQUISE', class: 'decision-review' }
-            };
-            
-            const decision = data.decision || 'unknown';
-            const decisionInfo = decisionMap[decision] || decisionMap['review_required'];
-            
-            document.getElementById('decisionBox').innerHTML = 
-                `<div class="decision-box ${decisionInfo.class}">${decisionInfo.text}</div>`;
-            
-            // Métriques
-            document.getElementById('scoreValue').textContent = 
-                data.primary_score ? (data.primary_score * 100).toFixed(1) + '%' : '-';
-            document.getElementById('confidenceValue').textContent = 
-                data.confidence ? (data.confidence * 100).toFixed(1) + '%' : '-';
-            document.getElementById('riskValue').textContent = data.risk_level || '-';
-            document.getElementById('reviewValue').textContent = 
-                data.requires_human_review ? 'Oui' : 'Non';
-            
-            // Analyse détaillée
-            const analysis = data.analysis_summary || {};
-            let analysisHTML = '';
-            
-            if (analysis.client_analysis) {
-                analysisHTML += '<div class="analysis-item success-icon">Analyse client validée</div>';
-            }
-            if (analysis.scoring) {
-                const score = analysis.scoring;
-                if (score.success) {
-                    analysisHTML += `<div class="analysis-item success-icon">Score ML: ${(score.score * 100).toFixed(2)}% (confiance: ${(score.confidence * 100).toFixed(1)}%)</div>`;
-                }
-            }
-            if (analysis.risk_assessment) {
-                const risk = analysis.risk_assessment;
-                if (risk.success) {
-                    analysisHTML += `<div class="analysis-item success-icon">Évaluation des risques complétée</div>`;
-                }
-            }
-            
-            document.getElementById('analysisDetails').innerHTML = analysisHTML || '<div class="analysis-item">Pas d\'analyses détaillées</div>';
-            
-            // Recommandations
-            const recommendations = data.recommendations || [];
-            if (recommendations.length > 0) {
-                document.getElementById('recommendationsList').innerHTML = 
-                    recommendations.map(r => `<li>${r}</li>`).join('');
-            } else {
-                document.getElementById('recommendationsList').innerHTML = '<li>Aucune recommandation spécifique</li>';
-            }
-            
-            // Temps de traitement
-            document.getElementById('processingTime').textContent = `${processingTime}s`;
-            
-            document.getElementById('result').style.display = 'block';
-            document.getElementById('placeholder').style.display = 'none';
+        const elapsed = ((Date.now() - t0)/1000).toFixed(1);
+        if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+        renderPreview(await res.json(), elapsed);
+    } catch(err) {
+        showError('p', 'Erreur : ' + err.message);
+    } finally {
+        showLoad('p', false);
+    }
+});
+
+function renderPreview(d, elapsed) {
+    const statusMap = {
+        FAVORABLE:          { cls: 'status-favorable',   icon: '✅', label: 'PROFIL FAVORABLE' },
+        APPROFONDIE_REQUISE:{ cls: 'status-approfondie', icon: '⏳', label: 'ANALYSE APPROFONDIE REQUISE' },
+        DEFAVORABLE:        { cls: 'status-defavorable', icon: '❌', label: 'PROFIL DÉFAVORABLE' },
+    };
+    const s = statusMap[d.status] || statusMap['APPROFONDIE_REQUISE'];
+
+    let html = '';
+    if (d.cached) html += `<div class="alert-cached">⚡ Résultat depuis le cache (24h)</div>`;
+
+    html += `<div class="decision-box ${s.cls}">${s.icon} ${s.label}</div>`;
+    html += `<div class="item" style="margin-bottom:12px;font-size:0.88em;">${d.message}</div>`;
+    html += `<div class="item success" style="font-size:0.85em;">👉 ${d.next_action}</div>`;
+
+    // Documents manquants
+    if (d.missing_documents && d.missing_documents.length > 0) {
+        html += `<div class="section"><div class="section-title">📎 Documents manquants</div>`;
+        d.missing_documents.forEach(doc => { html += `<div class="item warning">${doc}</div>`; });
+        html += `</div>`;
+    }
+
+    // Facteurs (seulement si pas gris)
+    if (d.top_factors && d.top_factors.length > 0) {
+        const maxAbs = Math.max(...d.top_factors.map(f => Math.abs(f.shap_value||0)), 0.01);
+        html += `<div class="section"><div class="section-title">🔍 Facteurs principaux</div>`;
+        d.top_factors.forEach(f => {
+            const w = Math.round(Math.abs(f.shap_value||0) / maxAbs * 100);
+            const cls = (f.shap_value||0) > 0 ? 'shap-up' : 'shap-down';
+            html += `<div class="shap-bar">
+                <span class="shap-name">${f.feature||'—'}</span>
+                <div class="shap-track"><div class="shap-fill ${cls}" style="width:${w}%"></div></div>
+                <span class="shap-val">${f.impact==='réduit le risque'?'✅':'⚠️'}</span>
+            </div>`;
+        });
+        html += `</div>`;
+    }
+
+    // Recommandations
+    if (d.recommendations && d.recommendations.length > 0) {
+        html += `<div class="section"><div class="section-title">💡 Actions pour améliorer votre dossier</div>`;
+        d.recommendations.forEach(r => { html += `<div class="item success">→ ${r}</div>`; });
+        html += `</div>`;
+    }
+
+    html += `<div class="meta">⏱ ${elapsed}s • ID : ${d.application_id}</div>`;
+
+    const el = document.getElementById('p_result');
+    el.innerHTML = html;
+    el.style.display = 'block';
+}
+
+// ── FLUX B — Full Decision ────────────────────────────────────
+document.getElementById('decisionForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    clearError('d');
+    showLoad('d', true);
+    document.getElementById('d_result').style.display = 'none';
+    document.getElementById('d_placeholder').style.display = 'none';
+
+    const income = parseInt(document.getElementById('d_income').value);
+    const age    = parseInt(document.getElementById('d_age').value);
+    const loan   = parseInt(document.getElementById('d_loanAmount').value);
+    const monthly = parseInt(document.getElementById('d_monthly').value);
+    const seniority = parseInt(document.getElementById('d_seniority').value);
+    const duration  = parseInt(document.getElementById('d_duration').value);
+    const crClass   = parseInt(document.getElementById('d_crClass').value);
+
+    const payload = {
+        client_id: document.getElementById('d_clientId').value,
+        client_data: {
+            credit_type: document.getElementById('d_creditType').value,
+            loan_amount: loan,
+            monthly_salary: income,
+            monthly_payment: monthly,
+            client_age: age,
+            employment_status: document.getElementById('d_employment').value,
+            seniority_years: seniority,
+            loan_duration_months: duration,
+            debt_ratio: income > 0 ? monthly / income : 0,
+            cr_bct_class: crClass,
+            on_sanctions_list: document.getElementById('d_sanctions').checked,
+            AMT_INCOME_TOTAL: income * 12,
+            AMT_CREDIT: loan,
+            AMT_ANNUITY: monthly,
+            DAYS_BIRTH: -Math.round(age * 365.25),
+            DAYS_EMPLOYED: -Math.round(seniority * 365.25),
         }
-        
-        function showError(message) {
-            const errorDiv = document.getElementById('error');
-            errorDiv.textContent = message;
-            errorDiv.style.display = 'block';
-        }
-    </script>
+    };
+
+    try {
+        const t0 = Date.now();
+        const res = await fetch(`${API}/credit/decision`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload)
+        });
+        const elapsed = ((Date.now() - t0)/1000).toFixed(1);
+        if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+        renderDecision(await res.json(), elapsed);
+    } catch(err) {
+        showError('d', 'Erreur : ' + err.message);
+    } finally {
+        showLoad('d', false);
+    }
+});
+
+function renderDecision(d, elapsed) {
+    const decMap = {
+        APPROVE:         { cls: 'd-approve', icon: '✅', label: 'APPROUVÉ' },
+        REJECT:          { cls: 'd-reject',  icon: '❌', label: 'REJETÉ' },
+        REVIEW_REQUIRED: { cls: 'd-review',  icon: '⏳', label: 'RÉVISION REQUISE — Comité de crédit' },
+        BLOCKED:         { cls: 'd-blocked', icon: '🚫', label: 'BLOQUÉ — Suspicion de fraude' },
+    };
+    const dec = decMap[d.final_decision] || { cls: 'd-error', icon: '❓', label: d.final_decision };
+
+    let html = `<div class="decision-box ${dec.cls}">${dec.icon} ${dec.label}</div>`;
+
+    // Human-in-the-loop alert
+    if (d.human_review_required) {
+        html += `<div class="alert-human">⚠️ <strong>Révision humaine obligatoire</strong><br>${d.human_review_reasons.join(' • ')}</div>`;
+    }
+
+    // Fraud alert
+    if (d.fraud_risk_score > 0.3 || d.is_application_blocked) {
+        html += `<div class="alert-fraud">🔍 Score fraude : ${pct(d.fraud_risk_score)}
+            ${d.fraud_anomaly_type ? ' — ' + d.fraud_anomaly_type : ''}
+            ${d.is_application_blocked ? ' • <strong>Application bloquée</strong>' : ''}</div>`;
+    }
+
+    // Résumé
+    html += `<div class="item" style="font-size:0.85em;margin-bottom:12px;">${d.decision_summary}</div>`;
+
+    // Metrics
+    html += `<div class="metrics-grid">
+        <div class="metric"><div class="metric-label">PD Score</div><div class="metric-value">${pct(d.pd_score)}</div></div>
+        <div class="metric"><div class="metric-label">Confiance</div><div class="metric-value">${pct(d.pd_confidence)}</div></div>
+        <div class="metric"><div class="metric-label">Bande de risque</div><div class="metric-value">${d.risk_band||'—'}</div></div>
+        <div class="metric"><div class="metric-label">Zone grise</div><div class="metric-value">${d.in_grey_zone ? '⚠️ Oui' : '✅ Non'}</div></div>
+    </div>`;
+
+    // Policy
+    if (d.rule_id) {
+        html += `<div class="section"><div class="section-title">⚖️ Règle BCT déclenchée</div>
+            <div class="item"><strong>${d.rule_id}</strong>
+                ${d.recommended_product ? ' • Produit recommandé : '+d.recommended_product : ''}
+            </div></div>`;
+    }
+
+    // SHAP values
+    if (d.top_factors && d.top_factors.length > 0) {
+        const maxAbs = Math.max(...d.top_factors.map(f => Math.abs(f.shap_value||0)), 0.01);
+        html += `<div class="section"><div class="section-title">📈 SHAP Values — Top facteurs</div>`;
+        d.top_factors.forEach(f => {
+            const w = Math.round(Math.abs(f.shap_value||0) / maxAbs * 100);
+            const cls = (f.shap_value||0) > 0 ? 'shap-up' : 'shap-down';
+            html += `<div class="shap-bar">
+                <span class="shap-name">${f.feature||f.technical_name||'—'}</span>
+                <div class="shap-track"><div class="shap-fill ${cls}" style="width:${w}%"></div></div>
+                <span class="shap-val">${fmt(f.shap_value, 4)}</span>
+            </div>`;
+        });
+        html += `</div>`;
+    }
+
+    // Counterfactuals
+    if (d.counterfactuals && d.counterfactuals.length > 0) {
+        html += `<div class="section"><div class="section-title">🔄 Contrefactuels</div>`;
+        d.counterfactuals.slice(0,3).forEach(cf => {
+            html += `<div class="item success">→ ${cf.action} → <strong>${cf.impact}</strong></div>`;
+        });
+        html += `</div>`;
+    }
+
+    // Explication XAI pro
+    if (d.explanation) {
+        html += `<div class="section"><div class="section-title">💬 Explication XAI (mode conseiller)</div>
+            <div class="item" style="font-size:0.82em;line-height:1.5;">${d.explanation.replace(/\n/g,'<br>')}</div></div>`;
+    }
+
+    // Documents manquants
+    if (d.missing_documents && d.missing_documents.length > 0) {
+        html += `<div class="section"><div class="section-title">📎 Documents manquants</div>`;
+        d.missing_documents.forEach(doc => { html += `<div class="item warning">${doc}</div>`; });
+        html += `</div>`;
+    }
+
+    html += `<div class="meta">⏱ ${elapsed}s • Audit : ${d.audit_trail_length} events • ID : ${d.application_id}</div>`;
+
+    const el = document.getElementById('d_result');
+    el.innerHTML = html;
+    el.style.display = 'block';
+}
+</script>
 </body>
 </html>

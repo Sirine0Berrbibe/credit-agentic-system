@@ -27,6 +27,14 @@ from src.state import (
     CreditApplicationState,
     XAIExplanationResult,
 )
+from src.langsmith_tracing import (
+    annotate_current_run,
+    build_trace_metadata,
+    build_trace_tags,
+    process_trace_inputs,
+    process_trace_outputs,
+    traceable,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -261,85 +269,215 @@ class XAIAgent:
         self.db_client = db_client
         self.http_client = httpx.AsyncClient(timeout=10.0)
 
+    @traceable(
+        name="XAI Agent",
+        run_type="tool",
+        process_inputs=process_trace_inputs,
+        process_outputs=process_trace_outputs,
+    )
     async def process(self, state: CreditApplicationState) -> CreditApplicationState:
-        """Main entry point du XAI Agent"""
-
-        logger.info(f"[XAI_D] Starting for application {state['application_id']}")
+        """Main entry point — route vers mode client ou pro selon flux."""
+        xai_mode = state.get("xai_mode", "pro")
+        annotate_current_run(
+            metadata=build_trace_metadata(
+                service="aicredits-orchestrator",
+                component="agent",
+                operation="xai",
+                application_id=state.get("application_id"),
+                client_id=state.get("client_id"),
+                flux_type=state.get("flux_type"),
+                extra={"xai_mode": xai_mode},
+            ),
+            tags=build_trace_tags("agent", "xai", xai_mode),
+        )
+        logger.info(
+            "[XAI_D] Starting (mode=%s) for application %s",
+            xai_mode, state.get("application_id"),
+        )
         start_time = asyncio.get_event_loop().time()
 
         try:
-            # Extract SHAP values
-            shap_values = self._extract_shap_values(state["scoring_iterations"])
-            logger.info(f"[XAI_D] Extracted SHAP values for {len(shap_values)} features")
-
-            # Generate counterfactuals (with human labels)
+            shap_values = self._extract_shap_values(state.get("scoring_iterations", []))
             counterfactuals = CounterfactualGenerator.generate_counterfactuals(
                 pd_score=state["final_pd_score"],
                 shap_values=shap_values,
                 client_data=state["client_data"],
                 risk_band=state["risk_band"],
             )
-            logger.info(f"[XAI_D] Generated {len(counterfactuals)} counterfactuals")
 
-            # Generate natural explanation
-            natural_explanation = await self._generate_explanation(
-                state=state,
-                shap_values=shap_values,
-                counterfactuals=counterfactuals,
-            )
-
-            # Top factors with human labels
-            top_factors = []
-            for fname, value in sorted(
-                shap_values.items(), key=lambda x: abs(x[1]), reverse=True
-            )[:5]:
-                top_factors.append(
-                    {
-                        "technical_name": fname,
-                        "feature": translate_feature_name(fname),  # LABEL HUMAIN
-                        "shap_value": float(value),
-                        "impact": "augmente le risque" if value > 0 else "réduit le risque",
-                    }
-                )
-
-            xai_result: XAIExplanationResult = {
-                "shap_values": {k: float(v) for k, v in shap_values.items()},
-                "top_factors": top_factors,
-                "counterfactuals": counterfactuals,
-                "natural_explanation": natural_explanation,
-                "decision_threshold": 0.5,
-                "distance_to_threshold": abs(state["final_pd_score"] - 0.5),
-            }
+            if xai_mode == "client":
+                xai_result = await self._build_client_result(state, shap_values, counterfactuals)
+            else:
+                xai_result = await self._build_pro_result(state, shap_values, counterfactuals)
 
             state["xai_explanation"] = xai_result
             state["xai_latency_ms"] = (asyncio.get_event_loop().time() - start_time) * 1000
 
-            # Audit trail
             await self._write_to_audit_db(state, xai_result)
-
-            state["audit_trail"].append(
-                {
-                    "timestamp": datetime.utcnow().isoformat(),
-                    "agent": "XAI_D",
-                    "action": "GENERATED_EXPLANATION",
-                    "details": {
-                        "shap_features_count": len(shap_values),
-                        "counterfactuals_count": len(counterfactuals),
-                    },
-                }
-            )
-
+            state["audit_trail"].append({
+                "timestamp": datetime.utcnow().isoformat(),
+                "agent": "XAI_D",
+                "action": "GENERATED_EXPLANATION",
+                "details": {
+                    "xai_mode": xai_mode,
+                    "shap_features_count": len(shap_values),
+                    "counterfactuals_count": len(counterfactuals),
+                },
+            })
             state["processing_steps_completed"].append("XAI_D_COMPLETE")
+            logger.info("[XAI_D] Done in %.1fms", state["xai_latency_ms"])
 
-            logger.info(
-                f"[XAI_D] ✓ Generated humanized explanation in {state['xai_latency_ms']:.1f}ms"
-            )
-
-        except Exception as e:
-            logger.error(f"[XAI_D] Error: {e}")
-            state["error_messages"].append(f"XAI error: {str(e)}")
+        except Exception as exc:
+            logger.error("[XAI_D] Error: %s", exc)
+            state["error_messages"].append(f"XAI error: {exc}")
 
         return state
+
+    # ──────────────────────────────────────────────────────────
+    # CLIENT MODE — langage naturel, pas de PD brut, actionnable
+    # ──────────────────────────────────────────────────────────
+
+    async def _build_client_result(
+        self,
+        state: CreditApplicationState,
+        shap_values: Dict[str, float],
+        counterfactuals: List[Dict[str, Any]],
+    ) -> XAIExplanationResult:
+        pd_score = state["final_pd_score"]
+        in_grey = state.get("in_grey_zone", False) or (0.35 <= pd_score <= 0.65)
+
+        if in_grey:
+            explanation = (
+                "Votre dossier nécessite une analyse approfondie de la part de nos experts. "
+                "Cette vérification complémentaire est une procédure standard qui nous permet "
+                "de prendre la meilleure décision pour vous. Un conseiller vous contactera "
+                "sous 2 jours ouvrables pour finaliser votre demande."
+            )
+            return XAIExplanationResult(
+                shap_values={},           # masqué côté client
+                top_factors=[],           # masqué côté client
+                counterfactuals=[],       # masqué côté client
+                natural_explanation=explanation,
+                decision_threshold=0.5,
+                distance_to_threshold=abs(pd_score - 0.5),
+            )
+
+        # Score clair → explication simple et actionnable
+        top_factors_client = []
+        for fname, value in sorted(shap_values.items(), key=lambda x: abs(x[1]), reverse=True)[:3]:
+            top_factors_client.append({
+                "feature": translate_feature_name(fname),
+                "shap_value": float(value),
+                "impact": "augmente le risque" if value > 0 else "réduit le risque",
+            })
+
+        actionable_cfs = []
+        for cf in counterfactuals[:2]:
+            actionable_cfs.append({
+                "action": cf.get("action", ""),
+                "impact": cf.get("impact", ""),
+            })
+
+        explanation = await self._generate_client_explanation(state, top_factors_client, actionable_cfs)
+
+        return XAIExplanationResult(
+            shap_values={},
+            top_factors=top_factors_client,
+            counterfactuals=actionable_cfs,
+            natural_explanation=explanation,
+            decision_threshold=0.5,
+            distance_to_threshold=abs(pd_score - 0.5),
+        )
+
+    # ──────────────────────────────────────────────────────────
+    # PRO MODE — SHAP bruts, PD score, counterfactuels, audit
+    # ──────────────────────────────────────────────────────────
+
+    async def _build_pro_result(
+        self,
+        state: CreditApplicationState,
+        shap_values: Dict[str, float],
+        counterfactuals: List[Dict[str, Any]],
+    ) -> XAIExplanationResult:
+        top_factors = []
+        for fname, value in sorted(shap_values.items(), key=lambda x: abs(x[1]), reverse=True)[:5]:
+            top_factors.append({
+                "technical_name": fname,
+                "feature": translate_feature_name(fname),
+                "shap_value": float(value),
+                "impact": "augmente le risque" if value > 0 else "réduit le risque",
+            })
+
+        explanation = await self._generate_explanation(state, shap_values, counterfactuals)
+        # Append audit log reference for GDPR compliance
+        explanation += (
+            f"\n\n[Réf. audit : application_id={state.get('application_id', 'N/A')} | "
+            f"PD={state['final_pd_score']:.4f} | "
+            f"modèle={state.get('ml_model_version', 'N/A')} | "
+            f"règle={state.get('policy_decision', {}).get('rule_id', 'N/A')}]"
+        )
+
+        return XAIExplanationResult(
+            shap_values={k: float(v) for k, v in shap_values.items()},
+            top_factors=top_factors,
+            counterfactuals=counterfactuals,
+            natural_explanation=explanation,
+            decision_threshold=0.5,
+            distance_to_threshold=abs(state["final_pd_score"] - 0.5),
+        )
+
+    async def _generate_client_explanation(
+        self,
+        state: CreditApplicationState,
+        top_factors: List[Dict[str, Any]],
+        counterfactuals: List[Dict[str, Any]],
+    ) -> str:
+        policy_decision = state.get("policy_decision", {}).get("decision", "")
+        pd_score = state["final_pd_score"]
+
+        if self.llm_client:
+            try:
+                factors_text = "\n".join(
+                    f"- {f['feature']} : {f['impact']}" for f in top_factors
+                )
+                actions_text = "\n".join(
+                    f"- {cf['action']} → {cf['impact']}" for cf in counterfactuals
+                )
+                prompt = f"""
+Tu es un conseiller bancaire bienveillant qui explique une décision de crédit à un particulier tunisien.
+Décision : {policy_decision}
+Facteurs principaux :
+{factors_text}
+Actions possibles :
+{actions_text}
+Écris une explication en 3–4 phrases : simple, empathique, orientée vers ce que le client peut faire.
+N'utilise AUCUN terme technique. Écris en français tunisien accessible.
+"""
+                response = await self.llm_client.agenerate_text(prompt)
+                return response.text
+            except Exception:
+                pass
+
+        # Fallback template client
+        top_label = top_factors[0]["feature"] if top_factors else "votre profil financier"
+        action = counterfactuals[0]["action"] if counterfactuals else ""
+        if policy_decision == "APPROVE":
+            return (
+                f"Bonne nouvelle ! Votre demande de crédit a été acceptée. "
+                f"Votre dossier est solide, notamment grâce à {top_label}. "
+                f"Nos équipes vous contacteront sous 24h pour les prochaines étapes."
+            )
+        elif policy_decision == "REJECT":
+            return (
+                f"Votre demande n'a pas pu être acceptée à ce stade. "
+                f"Le principal facteur identifié est {top_label}. "
+                f"{action + '. ' if action else ''}"
+                f"Vous pouvez repostuler dans 3 mois après amélioration de votre dossier."
+            )
+        return (
+            f"Votre dossier est en cours d'examen. "
+            f"Un conseiller analysera {top_label} et vous contactera sous 2 jours ouvrables."
+        )
 
     def _extract_shap_values(
         self, scoring_iterations: List[Dict[str, Any]]
