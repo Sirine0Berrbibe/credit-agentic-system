@@ -8,6 +8,12 @@ from openai import AzureOpenAI
 from pydantic import BaseModel, Field
 
 try:
+    from src.langsmith_tracing import (
+        annotate_current_run,
+        process_trace_inputs,
+        process_trace_outputs,
+        traceable,
+    )
     from src.agents.guarantee_agent.config import settings
     from src.agents.guarantee_agent.agent.prompts import (
         DOCUMENT_INTELLIGENCE_SYSTEM_PROMPT,
@@ -35,6 +41,12 @@ try:
         check_insurance,
     )
 except ImportError:
+    from langsmith_tracing import (
+        annotate_current_run,
+        process_trace_inputs,
+        process_trace_outputs,
+        traceable,
+    )
     from config import settings
     from agent.prompts import (
         DOCUMENT_INTELLIGENCE_SYSTEM_PROMPT,
@@ -133,7 +145,20 @@ class GuaranteeAgent:
                 self.llm = None
                 self.deployment = deployment
 
+    @traceable(
+        name="Guarantee Agent",
+        run_type="tool",
+        process_inputs=process_trace_inputs,
+        process_outputs=process_trace_outputs,
+    )
     def run(self, dossier: dict, require_documents: bool = True) -> dict:
+        annotate_current_run(
+            metadata={
+                "operation": "guarantee",
+                "client_id": dossier.get("client_id"),
+                "require_documents": require_documents,
+            }
+        )
         analysis = self.analyze(dossier, require_documents=require_documents)
 
         if self.enable_document_intelligence:
@@ -263,6 +288,12 @@ class GuaranteeAgent:
 
         return analysis
 
+    @traceable(
+        name="Guarantee LLM Synthesis",
+        run_type="llm",
+        process_inputs=process_trace_inputs,
+        process_outputs=process_trace_outputs,
+    )
     def _synthesize_with_llm(
         self,
         dossier: dict,

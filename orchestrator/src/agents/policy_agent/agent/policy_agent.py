@@ -20,6 +20,14 @@ from pydantic import BaseModel
 from src.agents.policy_agent.agent.prompts import DECISION_PROMPT_TEMPLATE, SYSTEM_PROMPT
 from src.agents.policy_agent.config import settings
 from src.state import CreditApplicationState
+from src.langsmith_tracing import (
+    annotate_current_run,
+    build_trace_metadata,
+    build_trace_tags,
+    process_trace_inputs,
+    process_trace_outputs,
+    traceable,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -357,7 +365,24 @@ class PolicyAgent:
     # Public interface
     # ------------------------------------------------------------------
 
+    @traceable(
+        name="Policy Agent",
+        run_type="tool",
+        process_inputs=process_trace_inputs,
+        process_outputs=process_trace_outputs,
+    )
     async def process(self, state: CreditApplicationState) -> CreditApplicationState:
+        annotate_current_run(
+            metadata=build_trace_metadata(
+                service="aicredits-orchestrator",
+                component="agent",
+                operation="policy",
+                application_id=state.get("application_id"),
+                client_id=state.get("client_id"),
+                flux_type=state.get("flux_type"),
+            ),
+            tags=build_trace_tags("agent", "policy", state.get("flux_type")),
+        )
         logger.info("[POLICY_C] Processing application %s", state.get("application_id"))
         start = time.monotonic()
 
@@ -440,6 +465,12 @@ class PolicyAgent:
         # Fallback: hard rules only
         return self._hard_rules_only_decision(features, hard_decision, hard_rule_id, matched_ids, hard_results)
 
+    @traceable(
+        name="Policy LLM Decision",
+        run_type="llm",
+        process_inputs=process_trace_inputs,
+        process_outputs=process_trace_outputs,
+    )
     def _llm_decide(
         self,
         features: Dict[str, Any],
@@ -474,6 +505,16 @@ class PolicyAgent:
             in_grey_zone="Oui" if features.get("in_grey_zone") else "Non",
             hard_rules_summary=hard_summary,
             rag_context=rag_context,
+        )
+
+        annotate_current_run(
+            metadata={
+                "provider": "azure_openai",
+                "deployment": settings.azure_openai_deployment,
+                "rag_chunk_count": len(rag_chunks),
+                "failed_hard_rule_count": len([r for r in hard_results if not r["passed"]]),
+            },
+            tags=build_trace_tags("policy", "llm"),
         )
 
         response = self._openai.chat.completions.create(

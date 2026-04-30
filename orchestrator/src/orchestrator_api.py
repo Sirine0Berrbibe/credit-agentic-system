@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any, List
 import logging
 from datetime import datetime
+import uuid
 
 from config.settings import get_config
 from src.state import CreditApplicationState
@@ -17,6 +18,14 @@ from src.orchestrator_graph import OrchestratorGraph, create_orchestrator
 from src.agents.scoring_agent import FeatureStore
 from src.infrastructure import get_infra_manager
 from src.llm_client import AzureOpenAIClient
+from src.langsmith_tracing import (
+    annotate_current_run,
+    build_trace_metadata,
+    build_trace_tags,
+    process_trace_inputs,
+    process_trace_outputs,
+    traceable,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -209,11 +218,39 @@ class OrchestratorAPI:
         self._initialized = False
 
     # ── Flux A — Score Preview ────────────────────────────────
+    @traceable(
+        name="API Score Preview",
+        run_type="chain",
+        process_inputs=process_trace_inputs,
+        process_outputs=process_trace_outputs,
+    )
     async def score_preview(self, request: ScorePreviewRequest) -> ScorePreviewResponse:
         await self.initialize()
+        client_data = dict(request.client_data)
+        application_id = (
+            client_data.get("application_id")
+            or client_data.get("applicationId")
+            or str(uuid.uuid4())
+        )
+        client_data.setdefault("application_id", application_id)
+        client_data.setdefault("created_at", datetime.utcnow().isoformat())
+
+        annotate_current_run(
+            metadata=build_trace_metadata(
+                service="aicredits-orchestrator",
+                component="api",
+                operation="score_preview",
+                application_id=application_id,
+                client_id=request.client_id,
+                flux_type="preview",
+                env=get_config().env.value,
+            ),
+            tags=build_trace_tags("api", "preview", "credit"),
+        )
+
         state: CreditApplicationState = await self.orchestrator.process_application(
             client_id=request.client_id,
-            client_data=request.client_data,
+            client_data=client_data,
             flux_type="preview",
         )
 
@@ -234,6 +271,14 @@ class OrchestratorAPI:
             if cf.get("action")
         ] if not in_grey else []
 
+        annotate_current_run(
+            metadata={
+                "final_decision": state.get("final_decision"),
+                "score_preview_cached": state.get("score_preview_cached", False),
+                "human_review_required": state.get("human_review_required", False),
+            }
+        )
+
         return ScorePreviewResponse(
             application_id=state["application_id"],
             client_id=state["client_id"],
@@ -250,17 +295,54 @@ class OrchestratorAPI:
         )
 
     # ── Flux B — Full Decision ────────────────────────────────
+    @traceable(
+        name="API Full Decision",
+        run_type="chain",
+        process_inputs=process_trace_inputs,
+        process_outputs=process_trace_outputs,
+    )
     async def full_decision(self, request: CreditApplicationRequest) -> CreditDecisionResponse:
         await self.initialize()
+        client_data = dict(request.client_data)
+        application_id = (
+            client_data.get("application_id")
+            or client_data.get("applicationId")
+            or str(uuid.uuid4())
+        )
+        client_data.setdefault("application_id", application_id)
+        client_data.setdefault("created_at", datetime.utcnow().isoformat())
+
+        annotate_current_run(
+            metadata=build_trace_metadata(
+                service="aicredits-orchestrator",
+                component="api",
+                operation="full_decision",
+                application_id=application_id,
+                client_id=request.client_id,
+                flux_type="full",
+                env=get_config().env.value,
+            ),
+            tags=build_trace_tags("api", "full", "credit"),
+        )
+
         state: CreditApplicationState = await self.orchestrator.process_application(
             client_id=request.client_id,
-            client_data=request.client_data,
+            client_data=client_data,
             flux_type="full",
         )
 
         fraud = state.get("fraud_analysis") or {}
         policy = state.get("policy_decision", {})
         xai = state.get("xai_explanation", {})
+
+        annotate_current_run(
+            metadata={
+                "final_decision": state.get("final_decision"),
+                "risk_band": state.get("risk_band"),
+                "human_review_required": state.get("human_review_required", False),
+                "is_application_blocked": state.get("is_application_blocked", False),
+            }
+        )
 
         return CreditDecisionResponse(
             application_id=state["application_id"],

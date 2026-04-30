@@ -22,6 +22,14 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 
 from src.state import CreditApplicationState, FraudAnalysisResult
+from src.langsmith_tracing import (
+    annotate_current_run,
+    build_trace_metadata,
+    build_trace_tags,
+    process_trace_inputs,
+    process_trace_outputs,
+    traceable,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -213,7 +221,24 @@ class FraudAgent:
         self._velocity = VelocityChecker(redis_client)
         self._doc_checker = DocumentInconsistencyChecker()
 
+    @traceable(
+        name="Fraud Agent",
+        run_type="tool",
+        process_inputs=process_trace_inputs,
+        process_outputs=process_trace_outputs,
+    )
     async def process(self, state: CreditApplicationState) -> CreditApplicationState:
+        annotate_current_run(
+            metadata=build_trace_metadata(
+                service="aicredits-orchestrator",
+                component="agent",
+                operation="fraud",
+                application_id=state.get("application_id"),
+                client_id=state.get("client_id"),
+                flux_type=state.get("flux_type"),
+            ),
+            tags=build_trace_tags("agent", "fraud", state.get("flux_type")),
+        )
         logger.info("[FRAUD_E] Checking fraud for application %s", state.get("application_id"))
         start = time.monotonic()
 

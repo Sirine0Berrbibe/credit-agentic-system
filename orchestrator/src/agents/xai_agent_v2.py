@@ -27,6 +27,14 @@ from src.state import (
     CreditApplicationState,
     XAIExplanationResult,
 )
+from src.langsmith_tracing import (
+    annotate_current_run,
+    build_trace_metadata,
+    build_trace_tags,
+    process_trace_inputs,
+    process_trace_outputs,
+    traceable,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -261,9 +269,27 @@ class XAIAgent:
         self.db_client = db_client
         self.http_client = httpx.AsyncClient(timeout=10.0)
 
+    @traceable(
+        name="XAI Agent",
+        run_type="tool",
+        process_inputs=process_trace_inputs,
+        process_outputs=process_trace_outputs,
+    )
     async def process(self, state: CreditApplicationState) -> CreditApplicationState:
         """Main entry point — route vers mode client ou pro selon flux."""
         xai_mode = state.get("xai_mode", "pro")
+        annotate_current_run(
+            metadata=build_trace_metadata(
+                service="aicredits-orchestrator",
+                component="agent",
+                operation="xai",
+                application_id=state.get("application_id"),
+                client_id=state.get("client_id"),
+                flux_type=state.get("flux_type"),
+                extra={"xai_mode": xai_mode},
+            ),
+            tags=build_trace_tags("agent", "xai", xai_mode),
+        )
         logger.info(
             "[XAI_D] Starting (mode=%s) for application %s",
             xai_mode, state.get("application_id"),

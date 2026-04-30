@@ -19,12 +19,21 @@ import uuid
 
 from langgraph.graph import StateGraph, START, END
 
+from config.settings import get_config
 from src.state import CreditApplicationState, DEFAULT_STATE
 from src.agents.scoring_agent import ScoringAgent, FeatureStore
 from src.agents.xai_agent_v2 import XAIAgent
 from src.agents.guarantee_agent.agent.guarantee_agent import GuaranteeAgent
 from src.agents.policy_agent.agent.policy_agent import PolicyAgent
 from src.agents.fraud_agent import FraudAgent
+from src.langsmith_tracing import (
+    annotate_current_run,
+    build_trace_metadata,
+    build_trace_tags,
+    process_trace_inputs,
+    process_trace_outputs,
+    traceable,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -109,7 +118,25 @@ class OrchestratorGraph:
     # Nodes
     # ──────────────────────────────────────────────────────────
 
+    @traceable(
+        name="Node Initialize",
+        run_type="tool",
+        process_inputs=process_trace_inputs,
+        process_outputs=process_trace_outputs,
+    )
     async def _node_initialize(self, state: CreditApplicationState) -> CreditApplicationState:
+        annotate_current_run(
+            metadata=build_trace_metadata(
+                service="aicredits-orchestrator",
+                component="langgraph-node",
+                operation="initialize",
+                application_id=state.get("application_id"),
+                client_id=state.get("client_id"),
+                flux_type=state.get("flux_type"),
+                env=get_config().env.value,
+            ),
+            tags=build_trace_tags("langgraph", "initialize", state.get("flux_type")),
+        )
         logger.info("[ORCHESTRATOR] Initializing (%s)", state.get("flux_type", "full"))
         if not state.get("application_id"):
             state["application_id"] = str(uuid.uuid4())
@@ -136,7 +163,25 @@ class OrchestratorGraph:
                                 "flux_type": state.get("flux_type")}, state)
         return state
 
+    @traceable(
+        name="Node Guarantee",
+        run_type="tool",
+        process_inputs=process_trace_inputs,
+        process_outputs=process_trace_outputs,
+    )
     async def _node_guarantee_a(self, state: CreditApplicationState) -> CreditApplicationState:
+        annotate_current_run(
+            metadata=build_trace_metadata(
+                service="aicredits-orchestrator",
+                component="langgraph-node",
+                operation="guarantee_a",
+                application_id=state.get("application_id"),
+                client_id=state.get("client_id"),
+                flux_type=state.get("flux_type"),
+                env=get_config().env.value,
+            ),
+            tags=build_trace_tags("langgraph", "guarantee", state.get("flux_type")),
+        )
         logger.info("[ORCHESTRATOR] Running guarantee/document workflow")
         state["orchestrator_state"] = "DOCUMENT_PROCESSING"
         state["processing_steps_completed"].append("GUARANTEE_A_START")
@@ -196,7 +241,25 @@ class OrchestratorGraph:
             )
         return state
 
+    @traceable(
+        name="Node Scoring",
+        run_type="tool",
+        process_inputs=process_trace_inputs,
+        process_outputs=process_trace_outputs,
+    )
     async def _node_scoring_b(self, state: CreditApplicationState) -> CreditApplicationState:
+        annotate_current_run(
+            metadata=build_trace_metadata(
+                service="aicredits-orchestrator",
+                component="langgraph-node",
+                operation="scoring_b",
+                application_id=state.get("application_id"),
+                client_id=state.get("client_id"),
+                flux_type=state.get("flux_type"),
+                env=get_config().env.value,
+            ),
+            tags=build_trace_tags("langgraph", "scoring", state.get("flux_type")),
+        )
         logger.info("[ORCHESTRATOR] Calling Scoring Agent for %s", state["application_id"])
         state = await self.scoring_agent.process(state)
 
@@ -228,7 +291,25 @@ class OrchestratorGraph:
         }, state)
         return state
 
+    @traceable(
+        name="Node Policy",
+        run_type="tool",
+        process_inputs=process_trace_inputs,
+        process_outputs=process_trace_outputs,
+    )
     async def _node_policy_c(self, state: CreditApplicationState) -> CreditApplicationState:
+        annotate_current_run(
+            metadata=build_trace_metadata(
+                service="aicredits-orchestrator",
+                component="langgraph-node",
+                operation="policy_c",
+                application_id=state.get("application_id"),
+                client_id=state.get("client_id"),
+                flux_type=state.get("flux_type"),
+                env=get_config().env.value,
+            ),
+            tags=build_trace_tags("langgraph", "policy", state.get("flux_type")),
+        )
         logger.info("[ORCHESTRATOR] Calling Policy Agent for %s", state["application_id"])
         state = await self.policy_agent.process(state)
 
@@ -236,7 +317,26 @@ class OrchestratorGraph:
         await self._persist_snapshot(state, "POLICY_C")
         return state
 
+    @traceable(
+        name="Node XAI",
+        run_type="tool",
+        process_inputs=process_trace_inputs,
+        process_outputs=process_trace_outputs,
+    )
     async def _node_xai_d(self, state: CreditApplicationState) -> CreditApplicationState:
+        annotate_current_run(
+            metadata=build_trace_metadata(
+                service="aicredits-orchestrator",
+                component="langgraph-node",
+                operation="xai_d",
+                application_id=state.get("application_id"),
+                client_id=state.get("client_id"),
+                flux_type=state.get("flux_type"),
+                env=get_config().env.value,
+                extra={"xai_mode": state.get("xai_mode")},
+            ),
+            tags=build_trace_tags("langgraph", "xai", state.get("xai_mode")),
+        )
         logger.info("[ORCHESTRATOR] Calling XAI Agent (mode=%s) for %s",
                     state.get("xai_mode", "pro"), state["application_id"])
         state = await self.xai_agent.process(state)
@@ -249,7 +349,25 @@ class OrchestratorGraph:
         }, state)
         return state
 
+    @traceable(
+        name="Node Finalize",
+        run_type="tool",
+        process_inputs=process_trace_inputs,
+        process_outputs=process_trace_outputs,
+    )
     async def _node_finalize(self, state: CreditApplicationState) -> CreditApplicationState:
+        annotate_current_run(
+            metadata=build_trace_metadata(
+                service="aicredits-orchestrator",
+                component="langgraph-node",
+                operation="finalize",
+                application_id=state.get("application_id"),
+                client_id=state.get("client_id"),
+                flux_type=state.get("flux_type"),
+                env=get_config().env.value,
+            ),
+            tags=build_trace_tags("langgraph", "finalize", state.get("flux_type")),
+        )
         logger.info("[ORCHESTRATOR] Finalizing application %s", state["application_id"])
         guarantee_analysis = state.get("guarantee_analysis", {})
 
@@ -365,12 +483,26 @@ class OrchestratorGraph:
             "client_id": state["client_id"],
             "flux_type": state.get("flux_type"),
         }, state)
+        annotate_current_run(
+            metadata={
+                "final_decision": state.get("final_decision"),
+                "risk_band": state.get("risk_band"),
+                "human_review_required": state.get("human_review_required", False),
+                "is_application_blocked": state.get("is_application_blocked", False),
+            }
+        )
         return state
 
     # ──────────────────────────────────────────────────────────
     # Public entry point
     # ──────────────────────────────────────────────────────────
 
+    @traceable(
+        name="Process Credit Application",
+        run_type="chain",
+        process_inputs=process_trace_inputs,
+        process_outputs=process_trace_outputs,
+    )
     async def process_application(
         self,
         client_id: str,
@@ -389,6 +521,20 @@ class OrchestratorGraph:
         )
         xai_mode = "client" if flux_type == "preview" else "pro"
 
+        annotate_current_run(
+            metadata=build_trace_metadata(
+                service="aicredits-orchestrator",
+                component="langgraph",
+                operation="process_application",
+                application_id=application_id,
+                client_id=client_id,
+                flux_type=flux_type,
+                env=get_config().env.value,
+                extra={"xai_mode": xai_mode},
+            ),
+            tags=build_trace_tags("langgraph", flux_type, "credit-decision"),
+        )
+
         # ── Redis preview cache ─────────────────────────────
         cache_key: Optional[str] = None
         if flux_type == "preview" and self.redis_client:
@@ -397,6 +543,7 @@ class OrchestratorGraph:
             if cached:
                 logger.info("[ORCHESTRATOR] Preview cache HIT for client %s", client_id)
                 cached["score_preview_cached"] = True
+                annotate_current_run(metadata={"score_preview_cached": True})
                 return cached
 
         initial_state: CreditApplicationState = {
@@ -439,6 +586,15 @@ class OrchestratorGraph:
             # Cache the preview result
             if flux_type == "preview" and cache_key and self.redis_client:
                 await self._set_preview_cache(cache_key, final_state)
+
+            annotate_current_run(
+                metadata={
+                    "final_decision": final_state.get("final_decision"),
+                    "risk_band": final_state.get("risk_band"),
+                    "human_review_required": final_state.get("human_review_required", False),
+                    "is_application_blocked": final_state.get("is_application_blocked", False),
+                }
+            )
 
             return final_state
 
