@@ -1,0 +1,7 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "aicredits_orchestrator": "./src/studio_graph.py:agent"
+  },
+  "env": "./.env"
+}

@@ -182,6 +182,23 @@ class TestGuaranteeAgentUnit:
 
         assert result["verdict"] in ("OK", "CONDITIONNEL", "KO")
 
+    @patch("agent.guarantee_agent.AzureOpenAI")
+    def test_llm_call_falls_back_to_max_tokens_on_legacy_sdk(self, mock_azure):
+        create_mock = mock_azure.return_value.chat.completions.create
+        create_mock.side_effect = [
+            TypeError(
+                "Completions.create() got an unexpected keyword argument 'max_completion_tokens'"
+            ),
+            mock_llm_response("OK", "Compat SDK."),
+        ]
+
+        agent = GuaranteeAgent()
+        result = agent.run(dossier_immo_ok())
+
+        assert result["verdict"] == "OK"
+        assert create_mock.call_args_list[0].kwargs["max_completion_tokens"] == 800
+        assert create_mock.call_args_list[1].kwargs["max_tokens"] == 800
+
 
 @pytest.mark.integration
 class TestGuaranteeAgentIntegration:

@@ -16,7 +16,10 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
+import pickle
 import time
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -61,7 +64,20 @@ class IsolationForestEngine:
         self._trained = False
         self._init_model()
 
+    _CACHE_PATH = os.path.join(os.path.dirname(__file__), ".isoforest_cache.pkl")
+
     def _init_model(self) -> None:
+        # Load cached model to avoid retraining on every startup
+        if os.path.exists(self._CACHE_PATH):
+            try:
+                with open(self._CACHE_PATH, "rb") as f:
+                    self._model = pickle.load(f)
+                self._trained = True
+                logger.info("[FRAUD-IF] Loaded IsolationForest from disk cache")
+                return
+            except Exception as exc:
+                logger.warning("[FRAUD-IF] Cache load failed, retraining: %s", exc)
+
         try:
             from sklearn.ensemble import IsolationForest
 
@@ -93,6 +109,14 @@ class IsolationForestEngine:
             self._model.fit(X)
             self._trained = True
             logger.info("[FRAUD-IF] Isolation Forest trained on %d synthetic samples", n)
+
+            try:
+                with open(self._CACHE_PATH, "wb") as f:
+                    pickle.dump(self._model, f)
+                logger.info("[FRAUD-IF] Saved IsolationForest to disk cache")
+            except Exception as exc:
+                logger.warning("[FRAUD-IF] Cache save failed: %s", exc)
+
         except ImportError:
             logger.warning("[FRAUD-IF] scikit-learn not installed — IF scoring disabled")
         except Exception as exc:
@@ -266,7 +290,9 @@ class FraudAgent:
         doc_inconsistency, doc_issues = self._doc_checker.check(state)
 
         # ── 4. Aggregate fraud score ─────────────────────────────────
-        velocity_score = min(1.0, employer_count / VELOCITY_EMPLOYER_THRESHOLD)
+        employer_velocity_score = min(1.0, employer_count / VELOCITY_EMPLOYER_THRESHOLD)
+        income_velocity_score = min(1.0, income_count / VELOCITY_INCOME_THRESHOLD)
+        velocity_score = max(employer_velocity_score, income_velocity_score)
         doc_score = 0.4 if doc_inconsistency else 0.0
         fraud_score = round(
             0.50 * iso_score + 0.35 * velocity_score + 0.15 * doc_score, 4
@@ -286,7 +312,7 @@ class FraudAgent:
             anomaly_type = "EMPLOYER_VELOCITY_ANOMALY"
         elif doc_inconsistency:
             anomaly_type = "DOCUMENT_INCONSISTENCY"
-        elif iso_score >= 0.6:
+        elif iso_score >= FRAUD_ESCALATION_THRESHOLD:
             anomaly_type = "BEHAVIORAL_ANOMALY_IF"
 
         elapsed_ms = (time.monotonic() - start) * 1000
@@ -300,7 +326,7 @@ class FraudAgent:
             "is_flagged": escalation_flag,
             "anomaly_type": anomaly_type,
             "velocity_metrics": velocity_metrics,
-            "biometric_verified": not doc_inconsistency,
+            "document_consistency_verified": not doc_inconsistency,
             "interrupt_signal": escalation_flag,
         }
 
@@ -318,7 +344,6 @@ class FraudAgent:
             state.setdefault("error_messages", [])
             state["error_messages"].extend([f"[FRAUD] {issue}" for issue in doc_issues])
 
-        from datetime import datetime
         state.setdefault("audit_trail", []).append({
             "timestamp": datetime.utcnow().isoformat(),
             "agent": "FRAUD_E",

@@ -20,6 +20,7 @@ import uuid
 from langgraph.graph import StateGraph, START, END
 
 from config.settings import get_config
+from src.application_ids import normalize_application_id
 from src.state import CreditApplicationState, DEFAULT_STATE
 from src.agents.scoring_agent import ScoringAgent, FeatureStore
 from src.agents.xai_agent_v2 import XAIAgent
@@ -62,7 +63,7 @@ class OrchestratorGraph:
         self.guarantee_agent = GuaranteeAgent(
             enable_llm=True,
             enable_document_intelligence=True,
-            enable_summary_llm=False,
+            enable_summary_llm=True,
         )
         self.scoring_agent = ScoringAgent(self.feature_store)
         self.policy_agent = PolicyAgent()
@@ -109,7 +110,16 @@ class OrchestratorGraph:
     # ──────────────────────────────────────────────────────────
 
     def _route_after_guarantee(self, state: CreditApplicationState) -> str:
-        return "proceed" if state.get("guarantee_ready_for_scoring") else "stop"
+        if state.get("guarantee_ready_for_scoring"):
+            return "proceed"
+        verdict = state.get("guarantee_analysis", {}).get("verdict")
+        # Hard KO always stops — document fraud, sanctions, hard eligibility failure
+        if verdict == "KO":
+            return "stop"
+        # CONDITIONNEL: proceed in both Flux A and Flux B so that scoring, policy, and XAI
+        # all run. _node_finalize will set the final decision to REVIEW_REQUIRED and surface
+        # the guarantee conditions alongside the AI analysis to the consultant.
+        return "proceed"
 
     def _route_after_scoring(self, state: CreditApplicationState) -> str:
         return "preview" if state.get("flux_type") == "preview" else "full"
@@ -232,12 +242,19 @@ class OrchestratorGraph:
 
         if self.db_client:
             await self.db_client.save_features(state["client_id"], state["client_data"], "GUARANTEE_A")
+            # CONDITIONNEL routes to scoring in both Flux A and Flux B
+            proceeds_to_scoring = (
+                state["guarantee_ready_for_scoring"]
+                or analysis.get("verdict") not in (None, "KO")
+            )
             await self._save_handoff(
                 state, "GUARANTEE_A",
-                "SCORING_B" if state["guarantee_ready_for_scoring"] else "FRONTEND",
-                "GUARANTEE_TO_SCORING" if state["guarantee_ready_for_scoring"] else "GUARANTEE_TO_FRONTEND",
-                "READY_FOR_SCORING" if state["guarantee_ready_for_scoring"] else "ACTION_REQUIRED",
-                analysis.get("scoring_payload", {}) if state["guarantee_ready_for_scoring"] else state["frontend_payload"],
+                "SCORING_B" if proceeds_to_scoring else "FRONTEND",
+                "GUARANTEE_TO_SCORING" if proceeds_to_scoring else "GUARANTEE_TO_FRONTEND",
+                "READY_FOR_SCORING" if state["guarantee_ready_for_scoring"] else (
+                    "CONDITIONAL_SCORING" if proceeds_to_scoring else "ACTION_REQUIRED"
+                ),
+                analysis.get("scoring_payload", {}) if proceeds_to_scoring else state["frontend_payload"],
             )
         return state
 
@@ -315,6 +332,12 @@ class OrchestratorGraph:
 
         await self._write_audit(state, "POLICY_C", "DECISION_MADE", state["policy_decision"])
         await self._persist_snapshot(state, "POLICY_C")
+        await self._emit_event("policy.decided", {
+            "application_id": state["application_id"],
+            "decision": state["policy_decision"].get("decision"),
+            "rule_id": state["policy_decision"].get("rule_id"),
+            "flux_type": state.get("flux_type"),
+        }, state)
         return state
 
     @traceable(
@@ -370,10 +393,16 @@ class OrchestratorGraph:
         )
         logger.info("[ORCHESTRATOR] Finalizing application %s", state["application_id"])
         guarantee_analysis = state.get("guarantee_analysis", {})
+        guarantee_ready = state.get("guarantee_ready_for_scoring", False)
+        guarantee_verdict = guarantee_analysis.get("verdict")
 
-        if not state.get("guarantee_ready_for_scoring", False):
-            verdict = guarantee_analysis.get("verdict")
-            if verdict == "KO":
+        # Hard guarantee failure: only a KO verdict (document fraud, sanctions, hard eligibility).
+        # CONDITIONNEL verdicts now proceed through the full pipeline so that XAI and policy
+        # agents run; the final decision is overridden to REVIEW_REQUIRED after scoring below.
+        is_hard_guarantee_fail = not guarantee_ready and guarantee_verdict == "KO"
+
+        if is_hard_guarantee_fail:
+            if guarantee_verdict == "KO":
                 state["final_decision"] = "REJECT"
                 state["decision_summary"] = guarantee_analysis.get(
                     "note_comite", "Dossier rejeté avant scoring."
@@ -382,7 +411,16 @@ class OrchestratorGraph:
             else:
                 state["final_decision"] = "REVIEW_REQUIRED"
                 state["decision_summary"] = self._build_regularization_summary(guarantee_analysis)
-                state["next_action"] = "Téléverser les documents requis puis relancer l'analyse"
+                # Distinguish insurance conditions (form fields) from missing documents (uploads).
+                has_only_insurance_conditions = (
+                    not guarantee_analysis.get("documents_manquants")
+                    and guarantee_analysis.get("insurance_details", {}).get("is_blocking")
+                )
+                state["next_action"] = (
+                    "Souscrire les assurances requises puis relancer l'analyse"
+                    if has_only_insurance_conditions
+                    else "Régulariser le dossier (documents et/ou assurances) puis relancer l'analyse"
+                )
 
         elif state.get("is_application_blocked"):
             state["final_decision"] = "BLOCKED"
@@ -396,20 +434,40 @@ class OrchestratorGraph:
             # Flux A (preview) — pas de policy_decision
             if state.get("flux_type") == "preview":
                 pd = state["final_pd_score"]
-                if state.get("in_grey_zone") or (0.35 <= pd <= 0.65):
+                # Conditions from a conditional guarantee (e.g. missing insurance)
+                conditions = guarantee_analysis.get("conditions_deblocage", []) if not guarantee_ready else []
+                conditions_suffix = (
+                    f" Conditions requises avant finalisation : {'; '.join(conditions[:3])}."
+                    if conditions else ""
+                )
+                # Guard: only treat as critical error when scoring truly failed (pd=0.0).
+                # Fallback heuristic scoring is not a failure — it leaves a valid pd > 0.
+                scoring_failed = state.get("error_messages") and pd == 0.0
+                if scoring_failed:
+                    state["final_decision"] = "REVIEW_REQUIRED"
+                    state["decision_summary"] = (
+                        "Une erreur est survenue pendant l'analyse. "
+                        "Un conseiller examinera votre dossier manuellement."
+                    )
+                    state["next_action"] = "Contacter votre conseiller"
+                elif state.get("in_grey_zone") or (0.35 <= pd <= 0.65):
                     state["final_decision"] = "REVIEW_REQUIRED"
                     state["decision_summary"] = (
                         "Analyse approfondie requise. "
-                        "Un conseiller examinera votre dossier sous 2 jours ouvrables."
+                        f"Un conseiller examinera votre dossier sous 2 jours ouvrables.{conditions_suffix}"
                     )
                     state["next_action"] = "Soumettre une demande officielle pour une analyse complète"
                 elif pd < 0.35:
                     state["final_decision"] = "APPROVE"
-                    state["decision_summary"] = "Votre profil est favorable. Soumettez une demande officielle."
+                    state["decision_summary"] = (
+                        f"Votre profil est favorable. Soumettez une demande officielle.{conditions_suffix}"
+                    )
                     state["next_action"] = "Soumettre une demande officielle"
                 else:
                     state["final_decision"] = "REJECT"
-                    state["decision_summary"] = "Votre profil ne remplit pas les conditions actuelles."
+                    state["decision_summary"] = (
+                        f"Votre profil ne remplit pas les conditions actuelles.{conditions_suffix}"
+                    )
                     state["next_action"] = "Améliorer votre dossier et réessayer"
             else:
                 # Flux B (full)
@@ -432,6 +490,22 @@ class OrchestratorGraph:
                         f"Raison(s) : {'; '.join(state.get('human_review_reasons', ['Zone grise']))}"
                     )
                     state["next_action"] = "Rester disponible pour des justificatifs complémentaires"
+
+                # Guarantee conditions override: even if policy says APPROVE/REJECT, the file
+                # cannot be disbursed while guarantee conditions remain unresolved (CONDITIONNEL).
+                if not guarantee_ready and guarantee_verdict != "KO":
+                    state["final_decision"] = "REVIEW_REQUIRED"
+                    conditions_note = self._build_regularization_summary(guarantee_analysis)
+                    base_summary = state.get("decision_summary", "")
+                    state["decision_summary"] = (
+                        f"{base_summary} — {conditions_note}" if base_summary else conditions_note
+                    )
+                    state.setdefault("human_review_reasons", []).append(
+                        "Garantie conditionnelle — conditions à régulariser avant déblocage"
+                    )
+                    state["next_action"] = (
+                        "Régulariser les conditions de garantie (assurances / documents) avant déblocage"
+                    )
 
         # Human-in-the-loop final check
         if state.get("human_review_required") and state["final_decision"] not in ("REJECT", "BLOCKED"):
@@ -471,7 +545,10 @@ class OrchestratorGraph:
                 risk_band=state["risk_band"] or "PENDING_GUARANTEE",
                 top_factors=state["xai_explanation"]["top_factors"],
                 counterfactuals=state["xai_explanation"]["counterfactuals"],
-                explanation=state["decision_summary"],
+                explanation=(
+                    state["xai_explanation"].get("natural_explanation")
+                    or state["decision_summary"]
+                ),
                 fraud_risk_score=(state["fraud_analysis"]["fraud_risk_score"]
                                   if state["fraud_analysis"] else None),
                 processing_time_ms=state["total_processing_time_ms"],
@@ -494,6 +571,174 @@ class OrchestratorGraph:
         return state
 
     # ──────────────────────────────────────────────────────────
+    # Streaming entry points (SSE)
+    # ──────────────────────────────────────────────────────────
+
+    async def stream_application(
+        self,
+        client_id: str,
+        client_data: Dict[str, Any],
+        flux_type: str,
+        queue: "asyncio.Queue",
+    ) -> CreditApplicationState:
+        """
+        Runs the credit pipeline and pushes SSE event dicts into *queue*.
+        Pushes None as sentinel when done (success or error).
+
+        flux_type='preview' → Flux A (no FraudAgent, no PolicyAgent)
+        flux_type='full'    → Flux B (FraudAgent parallel + PolicyAgent)
+        """
+        import time
+
+        state: CreditApplicationState = {
+            **deepcopy(DEFAULT_STATE),
+            "application_id": str(uuid.uuid4()),
+            "client_id": client_id,
+            "created_at": datetime.utcnow().isoformat(),
+            "client_data": client_data,
+            "flux_type": flux_type,
+            "xai_mode": "client" if flux_type == "preview" else "pro",
+        }
+
+        async def evt(agent: str, status: str, **kw: Any) -> None:
+            await queue.put({"agent": agent, "status": status,
+                             "duration_ms": None, "summary": None,
+                             "rule_id": None, "fallback_reason": None, **kw})
+
+        try:
+            state = await self._node_initialize(state)
+
+            # ── GuaranteeAgent ────────────────────────────────
+            t0 = time.monotonic()
+            await evt("GuaranteeAgent", "running")
+            state = await self._node_guarantee_a(state)
+            g_ms = int((time.monotonic() - t0) * 1000)
+            dq = state.get("document_quality_score", 0.0)
+            verdict = (state.get("guarantee_analysis") or {}).get("verdict", "OK")
+            g_ok = state.get("guarantee_ready_for_scoring") or verdict not in (None, "KO")
+            if g_ok:
+                await evt("GuaranteeAgent", "done", duration_ms=g_ms,
+                          summary=f"doc_quality: {dq:.2f} — verdict: {verdict}")
+            else:
+                await evt("GuaranteeAgent", "fallback", duration_ms=g_ms,
+                          summary=f"verdict: {verdict}",
+                          fallback_reason=(state.get("guarantee_analysis") or {}).get(
+                              "note_comite", "Dossier incomplet"))
+
+            if not g_ok:
+                skipped = (["FraudAgent"] if flux_type == "full" else []) + \
+                          ["ScoringAgent"] + (["PolicyAgent"] if flux_type == "full" else []) + \
+                          ["XAIAgent"]
+                for s in skipped:
+                    await evt(s, "skipped")
+                state = await self._node_finalize(state)
+                await queue.put(self._make_final_event(state))
+                await queue.put(None)
+                return state
+
+            # ── FraudAgent background (Flux B only) ───────────
+            fraud_task: Optional[asyncio.Task] = None
+            t_fraud: float = 0.0
+            if flux_type == "full":
+                await evt("FraudAgent", "running")
+                t_fraud = time.monotonic()
+                fraud_task = asyncio.create_task(
+                    self.fraud_agent.process(deepcopy(state))
+                )
+            else:
+                await evt("FraudAgent", "skipped")
+
+            # ── ScoringAgent ──────────────────────────────────
+            t_s = time.monotonic()
+            await evt("ScoringAgent", "running")
+            state = await self._node_scoring_b(state)
+            s_ms = int((time.monotonic() - t_s) * 1000)
+            await evt("ScoringAgent", "done", duration_ms=s_ms,
+                      summary=(f"PD: {state.get('final_pd_score', 0):.3f} — "
+                                f"Band: {state.get('risk_band', '?')} — "
+                                f"Conf: {state.get('pd_confidence', 0):.2f}"))
+
+            # ── Await FraudAgent ──────────────────────────────
+            if fraud_task is not None:
+                try:
+                    fraud_result = await fraud_task
+                    f_ms = int((time.monotonic() - t_fraud) * 1000)
+                    fa = fraud_result.get("fraud_analysis") or {}
+                    state["fraud_analysis"] = fa
+                    state["fraud_check_completed"] = fraud_result.get("fraud_check_completed", False)
+                    if fraud_result.get("is_application_blocked"):
+                        state["is_application_blocked"] = True
+                    await evt("FraudAgent", "done", duration_ms=f_ms,
+                              summary=f"fraud_score: {fa.get('fraud_risk_score', 0):.3f} — "
+                                      f"detected: {fa.get('fraud_detected', False)}")
+                except Exception as fe:
+                    logger.error("[STREAM] FraudAgent failed: %s", fe)
+                    await evt("FraudAgent", "error", fallback_reason=str(fe)[:100])
+
+            if state.get("is_application_blocked"):
+                for s in (["PolicyAgent"] if flux_type == "full" else []) + ["XAIAgent"]:
+                    await evt(s, "skipped")
+                state["final_decision"] = "BLOCKED"
+                state["decision_summary"] = (
+                    "Application bloquée — suspicion de fraude. "
+                    f"Score fraude: {(state.get('fraud_analysis') or {}).get('fraud_risk_score', 0):.2f}"
+                )
+                await queue.put(self._make_final_event(state))
+                await queue.put(None)
+                return state
+
+            # ── PolicyAgent (Flux B only) ─────────────────────
+            if flux_type == "full":
+                t_p = time.monotonic()
+                await evt("PolicyAgent", "running")
+                state = await self._node_policy_c(state)
+                p_ms = int((time.monotonic() - t_p) * 1000)
+                pd_dec = state.get("policy_decision") or {}
+                prod = pd_dec.get("recommended_product", "")
+                await evt("PolicyAgent", "done", duration_ms=p_ms,
+                          summary=(f"{pd_dec.get('decision', '?')} — {prod}" if prod
+                                   else pd_dec.get("decision", "?")),
+                          rule_id=pd_dec.get("rule_id"))
+            else:
+                await evt("PolicyAgent", "skipped")
+
+            # ── XAIAgent ──────────────────────────────────────
+            t_x = time.monotonic()
+            await evt("XAIAgent", "running")
+            state = await self._node_xai_d(state)
+            x_ms = int((time.monotonic() - t_x) * 1000)
+            xai = state.get("xai_explanation") or {}
+            await evt("XAIAgent", "done", duration_ms=x_ms,
+                      summary=f"{len(xai.get('top_factors', []))} facteurs — "
+                               f"{len(xai.get('counterfactuals', []))} contrefactuels")
+
+            # ── Finalize ──────────────────────────────────────
+            state = await self._node_finalize(state)
+            await queue.put(self._make_final_event(state))
+
+        except Exception as exc:
+            logger.error("[STREAM] Pipeline error: %s", exc, exc_info=True)
+            await queue.put({
+                "agent": "FINAL_DECISION", "decision": "HUMAN_REVIEW",
+                "confidence": 0.0, "pd_score": 0.0,
+                "main_reason": f"Erreur système: {str(exc)[:120]}",
+            })
+
+        await queue.put(None)
+        return state
+
+    def _make_final_event(self, state: CreditApplicationState) -> Dict[str, Any]:
+        _map = {"APPROVE": "APPROVED", "REJECT": "REJECTED", "BLOCKED": "REJECTED"}
+        raw = state.get("final_decision", "REVIEW_REQUIRED")
+        return {
+            "agent": "FINAL_DECISION",
+            "decision": _map.get(raw, "HUMAN_REVIEW"),
+            "confidence": round(state.get("pd_confidence", 0.0), 4),
+            "pd_score": round(state.get("final_pd_score", 0.0), 4),
+            "main_reason": state.get("decision_summary", ""),
+        }
+
+    # ──────────────────────────────────────────────────────────
     # Public entry point
     # ──────────────────────────────────────────────────────────
 
@@ -509,11 +754,11 @@ class OrchestratorGraph:
         client_data: Dict[str, Any],
         flux_type: str = "full",
     ) -> CreditApplicationState:
-        application_id = (
-            client_data.get("application_id") or
-            client_data.get("applicationId") or
-            str(uuid.uuid4())
+        client_data = dict(client_data)
+        application_id = normalize_application_id(
+            client_data.get("application_id") or client_data.get("applicationId")
         )
+        client_data["application_id"] = application_id
         created_at = (
             client_data.get("created_at") or
             client_data.get("createdAt") or
@@ -558,19 +803,27 @@ class OrchestratorGraph:
 
         logger.info("[ORCHESTRATOR] Processing application %s (flux=%s)", application_id, flux_type)
 
+        fraud_task: Optional[asyncio.Task] = None
         try:
-            # Fraud runs in parallel only on Flux B
-            fraud_task: Optional[asyncio.Task] = None
-            if flux_type == "full":
-                fraud_task = asyncio.create_task(self.fraud_agent.process(deepcopy(initial_state)))
-
             final_state = await self.graph.ainvoke(initial_state)
 
+            # Fraud runs on Flux B after the graph — it needs guarantee_analysis populated by
+            # guarantee_a, so it cannot start before the graph completes.
+            if flux_type == "full":
+                fraud_task = asyncio.create_task(
+                    self.fraud_agent.process(deepcopy(final_state))
+                )
+
             if fraud_task is not None:
-                fraud_state = await fraud_task
+                try:
+                    fraud_state = await fraud_task
+                except Exception as fraud_exc:
+                    logger.error("[ORCHESTRATOR] FraudTask failed: %s", fraud_exc)
+                    fraud_state = {}
+
                 final_state["fraud_analysis"] = fraud_state.get("fraud_analysis")
                 final_state["fraud_check_completed"] = fraud_state.get("fraud_check_completed", False)
-                # If fraud flags after graph finalized, override decision
+
                 if fraud_state.get("is_application_blocked") and final_state["final_decision"] != "BLOCKED":
                     final_state["is_application_blocked"] = True
                     final_state["final_decision"] = "BLOCKED"
@@ -579,6 +832,12 @@ class OrchestratorGraph:
                         f"Score fraude={fraud_state['fraud_analysis']['fraud_risk_score']:.2f}."
                     )
                     final_state["next_action"] = "Contacter le support bancaire"
+                    final_state["audit_trail"].append({
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "agent": "FRAUD_E",
+                        "action": "APPLICATION_BLOCKED",
+                        "details": fraud_state.get("fraud_analysis", {}),
+                    })
                     await self._write_audit(final_state, "FRAUD_E", "APPLICATION_BLOCKED",
                                             fraud_state.get("fraud_analysis"))
                     await self._persist_snapshot(final_state, "FRAUD_OVERRIDE")
@@ -600,9 +859,11 @@ class OrchestratorGraph:
 
         except Exception as exc:
             logger.error("[ORCHESTRATOR] Error processing application: %s", exc)
+            if fraud_task is not None and not fraud_task.done():
+                fraud_task.cancel()
             initial_state["error_messages"].append(str(exc))
-            initial_state["final_decision"] = "ERROR"
-            initial_state["decision_summary"] = "Une erreur est survenue pendant le traitement."
+            initial_state["final_decision"] = "REVIEW_REQUIRED"
+            initial_state["decision_summary"] = "Une erreur est survenue pendant le traitement. Un conseiller examinera votre dossier."
             return initial_state
 
     # ──────────────────────────────────────────────────────────
@@ -687,16 +948,14 @@ class OrchestratorGraph:
         return f"{note} Actions requises : {'; '.join(conditions[:3])}."
 
     def _build_shared_feature_payload(self, client_data, analysis, frontend_payload):
+        # Only merge actual financial features extracted by guarantee_a.
+        # Orchestration metadata (verdict, frontend_payload, scoring_payload, etc.) is stored
+        # in dedicated top-level state fields and must NOT flow into client_data to avoid
+        # contaminating the feature vector sent to the ML server.
         combined = analysis.get("scoring_payload", {}).get("combined_features", {})
         return {
             **self._strip_document_blobs(client_data),
             **combined,
-            "guarantee_ready_for_scoring": analysis.get("ready_for_scoring", False),
-            "guarantee_verdict": analysis.get("verdict"),
-            "document_status": analysis.get("document_status", {}),
-            "document_intelligence": analysis.get("document_intelligence", {}),
-            "frontend_payload": frontend_payload,
-            "scoring_payload": analysis.get("scoring_payload", {}),
         }
 
     def _strip_document_blobs(self, payload: Dict[str, Any]) -> Dict[str, Any]:

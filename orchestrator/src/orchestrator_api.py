@@ -10,12 +10,12 @@ from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any, List
 import logging
 from datetime import datetime
-import uuid
 
 from config.settings import get_config
 from src.state import CreditApplicationState
 from src.orchestrator_graph import OrchestratorGraph, create_orchestrator
 from src.agents.scoring_agent import FeatureStore
+from src.application_ids import normalize_application_id
 from src.infrastructure import get_infra_manager
 from src.llm_client import AzureOpenAIClient
 from src.langsmith_tracing import (
@@ -130,10 +130,10 @@ class CreditDecisionResponse(BaseModel):
     frontend_messages: List[str]
     frontend_payload: Dict[str, Any]
 
-    # Scoring (pro)
-    pd_score: float
-    pd_confidence: float
-    risk_band: str
+    # Scoring (pro) — None when scoring did not run (e.g. guarantee failure)
+    pd_score: Optional[float] = None
+    pd_confidence: Optional[float] = None
+    risk_band: Optional[str] = None
     in_grey_zone: bool
 
     # Policy (pro)
@@ -147,8 +147,8 @@ class CreditDecisionResponse(BaseModel):
     counterfactuals: List[Dict[str, Any]]
     explanation: str
 
-    # Fraud (pro)
-    fraud_risk_score: float
+    # Fraud (pro) — None when fraud agent did not run
+    fraud_risk_score: Optional[float] = None
     is_application_blocked: bool
     fraud_anomaly_type: Optional[str]
 
@@ -211,6 +211,8 @@ class OrchestratorAPI:
                     bool(infra_manager and infra_manager.kafka_producer))
 
     async def close(self) -> None:
+        if self.orchestrator and hasattr(self.orchestrator, "scoring_agent"):
+            await self.orchestrator.scoring_agent.http_client.aclose()
         if self.llm_client:
             await self.llm_client.close()
         self.orchestrator = None
@@ -227,12 +229,10 @@ class OrchestratorAPI:
     async def score_preview(self, request: ScorePreviewRequest) -> ScorePreviewResponse:
         await self.initialize()
         client_data = dict(request.client_data)
-        application_id = (
-            client_data.get("application_id")
-            or client_data.get("applicationId")
-            or str(uuid.uuid4())
+        application_id = normalize_application_id(
+            client_data.get("application_id") or client_data.get("applicationId")
         )
-        client_data.setdefault("application_id", application_id)
+        client_data["application_id"] = application_id
         client_data.setdefault("created_at", datetime.utcnow().isoformat())
 
         annotate_current_run(
@@ -304,12 +304,10 @@ class OrchestratorAPI:
     async def full_decision(self, request: CreditApplicationRequest) -> CreditDecisionResponse:
         await self.initialize()
         client_data = dict(request.client_data)
-        application_id = (
-            client_data.get("application_id")
-            or client_data.get("applicationId")
-            or str(uuid.uuid4())
+        application_id = normalize_application_id(
+            client_data.get("application_id") or client_data.get("applicationId")
         )
-        client_data.setdefault("application_id", application_id)
+        client_data["application_id"] = application_id
         client_data.setdefault("created_at", datetime.utcnow().isoformat())
 
         annotate_current_run(
@@ -355,9 +353,9 @@ class OrchestratorAPI:
             document_issues=state.get("guarantee_analysis", {}).get("document_issues", {}),
             frontend_messages=state.get("frontend_messages", []),
             frontend_payload=state.get("frontend_payload", {}),
-            pd_score=state["final_pd_score"],
-            pd_confidence=state["pd_confidence"],
-            risk_band=state["risk_band"],
+            pd_score=state["final_pd_score"] or None,
+            pd_confidence=state["pd_confidence"] or None,
+            risk_band=state["risk_band"] or None,
             in_grey_zone=state.get("in_grey_zone", False),
             rule_id=policy.get("rule_id", ""),
             recommended_product=policy.get("recommended_product"),
@@ -365,8 +363,8 @@ class OrchestratorAPI:
             shap_values=xai.get("shap_values", {}),
             top_factors=xai.get("top_factors", []),
             counterfactuals=xai.get("counterfactuals", []),
-            explanation=xai.get("natural_explanation", ""),
-            fraud_risk_score=fraud.get("fraud_risk_score", 0.0),
+            explanation=xai.get("natural_explanation") or state.get("decision_summary", ""),
+            fraud_risk_score=fraud.get("fraud_risk_score") or None,
             is_application_blocked=state.get("is_application_blocked", False),
             fraud_anomaly_type=fraud.get("anomaly_type"),
             human_review_required=state.get("human_review_required", False),

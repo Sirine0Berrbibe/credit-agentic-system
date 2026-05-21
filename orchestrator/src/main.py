@@ -37,11 +37,13 @@ try:
 except Exception:
     policy_agent_router = None
 from .orchestrator_api import setup_orchestrator_routes, api as langgraph_api
+from .agent_stream_router import router as agent_stream_router
 from .infrastructure import InfrastructureManager, get_infra_manager, shutdown_infra
 from .agents.scoring_agent import ScoringAgent, FeatureStore
 from .state import CreditApplicationState, DEFAULT_STATE
 from .assistant_service import get_assistant_service, AssistantChatRequest, AssistantChatResponse
 from .llm_chat_service import get_llm_chat_service, ChatRequest, ChatResponse
+from .agent_chat_service import get_agent_chat_service, AgentChatRequest, AgentChatResponse
 # Configuration logging
 logging.basicConfig(
     level=logging.INFO,
@@ -182,14 +184,24 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# Configure CORS middleware - allow all origins for development
+# Configure CORS — restrict to explicit origins in non-development environments.
+# Set CORS_ALLOWED_ORIGINS env var as a comma-separated list for staging/production.
+_cors_env = os.getenv("CORS_ALLOWED_ORIGINS", "").strip()
+if _cors_env:
+    _allowed_origins = [o.strip() for o in _cors_env.split(",") if o.strip()]
+elif config.env == Environment.DEVELOPMENT:
+    _allowed_origins = ["*"]
+else:
+    _allowed_origins = [
+        "http://localhost:3000",
+        "http://localhost:4200",
+    ]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins
-    allow_credentials=False,  # Must be False when allow_origins=["*"]
-    allow_methods=["*"],
-    allow_headers=["*"],
-    expose_headers=["*"]
+    allow_origins=_allowed_origins,
+    allow_credentials=_allowed_origins != ["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 
 if guarantee_agent_router is not None:
@@ -198,6 +210,9 @@ if policy_agent_router is not None:
     app.include_router(policy_agent_router)
 else:
     logger.warning("Guarantee agent routes could not be loaded into the orchestrator app.")
+
+# Agent pipeline SSE stream
+app.include_router(agent_stream_router)
 
 # Initialize LangGraph orchestrator routes
 setup_orchestrator_routes(app)
@@ -365,6 +380,27 @@ async def assistant_chat(request: AssistantChatRequest) -> AssistantChatResponse
     except Exception as e:
         logger.error(f"Assistant chat error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Assistant error: {str(e)}")
+
+
+@app.post("/agent/chat", response_model=AgentChatResponse)
+async def agent_chat(request: AgentChatRequest) -> AgentChatResponse:
+    """
+    Chat avec un agent IA spécifique (FRAUD | SCORING | GUARANTEE | POLICY | XAI).
+    L'agent répond à partir de l'analyse réelle qu'il a effectuée sur ce dossier.
+    Chaque agent reste strictement dans son périmètre d'expertise.
+    """
+    try:
+        logger.info(
+            f"Agent chat — type={request.agentType}, "
+            f"message={request.userMessage[:60]}..."
+        )
+        service = get_agent_chat_service()
+        response = await service.chat(request)
+        logger.info(f"[{request.agentType}] Response generated (status={response.status})")
+        return response
+    except Exception as e:
+        logger.error(f"Agent chat error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Agent chat error: {str(e)}")
 
 
 @app.post("/orchestrator/chat", response_model=ChatResponse)

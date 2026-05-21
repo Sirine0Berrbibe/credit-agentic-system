@@ -37,6 +37,12 @@ def insurance_rules(data: dict):
     return apply_insurance_rules(data)
 
 
+@router.post("/validate-document-vision")
+def validate_document_vision(data: dict):
+    """LLM Vision-only validation — no Tesseract, faster, better Arabic support."""
+    return agent.validate_with_vision(data)
+
+
 @router.post("/run-agent")
 def run_agent(dossier: dict):
     return agent.run(dossier)

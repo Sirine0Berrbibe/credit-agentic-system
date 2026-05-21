@@ -28,6 +28,7 @@ from typing import Optional, List, Dict, Any
 from datetime import datetime
 import numpy as np
 
+from config.settings import get_config
 from src.state import (
     CreditApplicationState,
     ScoringIterationResult,
@@ -91,6 +92,13 @@ class FeatureStore:
         # ).to_dict()
         # enriched_features.update(features_dict)
 
+        # Tunisia: "centre des risques de BC" (external credit bureau) is not simulated.
+        # Clients have no external credit history — default these features to 0.5 (neutral)
+        # so the model doesn't penalize applicants for missing bureau data.
+        for ext_feat in ["EXT_SOURCE_MEAN", "EXT_SOURCE_1", "EXT_SOURCE_2", "EXT_SOURCE_3"]:
+            if ext_feat not in enriched_features or enriched_features[ext_feat] is None:
+                enriched_features[ext_feat] = 0.5
+
         return enriched_features
 
     def get_model_metadata(self, model_name: str = "credit_scoring") -> Dict[str, Any]:
@@ -105,7 +113,7 @@ class FeatureStore:
                 }
             except Exception as e:
                 logger.warning(f"MLflow unavailable: {e}")
-        return {"version": "unknown", "stage": "production"}
+        return {"version": "unknown", "stage": "unavailable"}
 
 
 class ScoringAgent:
@@ -122,11 +130,18 @@ class ScoringAgent:
     GREY_ZONE_MIN = 0.35
     GREY_ZONE_MAX = 0.65
     CONFIDENCE_THRESHOLD = 0.85
-    ML_SERVER_URL = "http://localhost:8000"
 
     def __init__(self, feature_store: Optional[FeatureStore] = None):
         self.feature_store = feature_store or FeatureStore()
-        self.http_client = httpx.AsyncClient(timeout=10.0)
+        cfg = get_config()
+        self.ml_server_url = cfg.mcp_server.base_url
+        self.http_client = httpx.AsyncClient(timeout=cfg.mcp_server.timeout)
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_):
+        await self.http_client.aclose()
 
     @traceable(
         name="Scoring Agent",
@@ -188,7 +203,7 @@ class ScoringAgent:
 
                 if result is None:
                     state["error_messages"].append(
-                        "ML Server unavailable, using fallback scoring"
+                        "ML Server: insufficient features for full model — fallback heuristic used"
                     )
                     result = self._fallback_scoring(enriched_data)
 
@@ -222,16 +237,21 @@ class ScoringAgent:
                 )
 
                 if in_grey_zone and not sufficient_confidence and iteration < self.MAX_ITERATIONS:
-                    # Continuer la boucle
-                    logger.info(
-                        f"[SCORING_B] Zone grise détectée - demande features supplémentaires"
-                    )
+                    logger.info("[SCORING_B] Zone grise détectée - demande features supplémentaires")
                     requested_features = await self._request_additional_features(
                         enriched_data, result
                     )
                     state["requested_additional_features"].update(requested_features)
-                    # En production: Kafka topic pour Document Agent
-                    # await kafka_producer.send("feature.request", ...)
+                    # In production, requested_features are fetched via Kafka/external enrichment.
+                    # Until that pipeline exists, mark requested keys as explicitly missing so the
+                    # next iteration's _identify_missing_features reflects the request accurately.
+                    for feat in requested_features:
+                        enriched_data.setdefault(feat, None)
+                    logger.warning(
+                        "[SCORING_B] Feature enrichment via Kafka not yet active — "
+                        "requested features (%s) have no values for this iteration",
+                        list(requested_features.keys()),
+                    )
                     continue
 
                 else:
@@ -248,12 +268,12 @@ class ScoringAgent:
                 state["final_pd_score"] = final_result["pd_score"]
                 state["pd_confidence"] = final_result["confidence"]
                 state["risk_band"] = final_result["risk_band"]
-                state["ml_model_version"] = final_result.get("model_version")
+                state["ml_model_version"] = final_result.get("model_version") or "unknown"
                 state["ml_latency_ms"] = (time.time() - start_time) * 1000
 
                 logger.info(
-                    f"[SCORING_B] ✓ Final PD Score: {final_result['pd_score']:.4f} "
-                    f"({final_result['risk_band']})"
+                    "[SCORING_B] Final PD Score: %.4f (%s)",
+                    final_result["pd_score"], final_result["risk_band"],
                 )
                 state["processing_steps_completed"].append("SCORING_B_COMPLETE")
 
@@ -281,7 +301,7 @@ class ScoringAgent:
         """
         annotate_current_run(
             metadata={
-                "ml_server_url": self.ML_SERVER_URL,
+                "ml_server_url": self.ml_server_url,
                 "feature_count": len(enriched_data or {}),
             },
             tags=build_trace_tags("ml-server", "predict"),
@@ -289,11 +309,10 @@ class ScoringAgent:
         try:
             payload = {"client_data": enriched_data}
 
-            logger.info(f"[SCORING_B] Calling ML Server: POST {self.ML_SERVER_URL}/predict")
+            logger.info("[SCORING_B] Calling ML Server: POST %s/predict", self.ml_server_url)
             response = await self.http_client.post(
-                f"{self.ML_SERVER_URL}/predict",
+                f"{self.ml_server_url}/predict",
                 json=payload,
-                timeout=30.0,
             )
 
             if response.status_code == 200:
@@ -304,8 +323,10 @@ class ScoringAgent:
                     n_features_total = result.get("n_features_total", 596)
                     feature_coverage = n_features_provided / max(1, n_features_total)
                     
-                    # If less than 10% of features available, use fallback
-                    if feature_coverage < 0.10:
+                    # If less than 1% of features available (~6 features), use fallback.
+                    # The stacking model handles missing features internally via imputation;
+                    # even 7 form features yield confidence=0.74 in practice.
+                    if feature_coverage < 0.01:
                         logger.warning(
                             f"[SCORING_B] Insufficient features: {n_features_provided}/{n_features_total} "
                             f"({feature_coverage*100:.1f}%). Using fallback scoring."

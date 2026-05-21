@@ -8,8 +8,11 @@ from datetime import datetime, timedelta
 from typing import Optional, Dict, List, Any
 
 import sqlalchemy as sa
+from sqlalchemy.dialects.postgresql import UUID as PGUUID, insert as pg_insert
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import declarative_base, sessionmaker
+
+from src.application_ids import to_uuid
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +24,7 @@ class AuditLogModel(Base):
 
     id = sa.Column(sa.Integer, primary_key=True, autoincrement=True)
     timestamp = sa.Column(sa.DateTime, nullable=False, default=datetime.utcnow)
-    application_id = sa.Column(sa.UUID, nullable=False, index=True)
+    application_id = sa.Column(PGUUID(as_uuid=True), nullable=False, index=True)
     client_id = sa.Column(sa.String(255), nullable=False, index=True)
     agent = sa.Column(sa.String(50), nullable=False)
     action = sa.Column(sa.String(255), nullable=False)
@@ -34,7 +37,7 @@ class ApplicationDecisionModel(Base):
     __tablename__ = "credit_decisions"
 
     id = sa.Column(sa.Integer, primary_key=True, autoincrement=True)
-    application_id = sa.Column(sa.UUID, nullable=False, unique=True, index=True)
+    application_id = sa.Column(PGUUID(as_uuid=True), nullable=False, unique=True, index=True)
     client_id = sa.Column(sa.String(255), nullable=False, index=True)
     decision = sa.Column(sa.String(50), nullable=False)
     final_pd_score = sa.Column(sa.Float, nullable=False)
@@ -69,7 +72,7 @@ class ApplicationStateSnapshotModel(Base):
     __tablename__ = "application_state_snapshots"
 
     id = sa.Column(sa.Integer, primary_key=True, autoincrement=True)
-    application_id = sa.Column(sa.String(64), nullable=False, index=True)
+    application_id = sa.Column(PGUUID(as_uuid=True), nullable=False, index=True)
     client_id = sa.Column(sa.String(255), nullable=False, index=True)
     stage = sa.Column(sa.String(64), nullable=False, index=True)
     payload = sa.Column(sa.JSON, nullable=False)
@@ -80,7 +83,7 @@ class AgentHandoffModel(Base):
     __tablename__ = "agent_handoffs"
 
     id = sa.Column(sa.Integer, primary_key=True, autoincrement=True)
-    application_id = sa.Column(sa.String(64), nullable=False, index=True)
+    application_id = sa.Column(PGUUID(as_uuid=True), nullable=False, index=True)
     client_id = sa.Column(sa.String(255), nullable=False, index=True)
     source_agent = sa.Column(sa.String(64), nullable=False, index=True)
     target_agent = sa.Column(sa.String(64), nullable=False, index=True)
@@ -144,10 +147,11 @@ class DatabaseClient:
         user_ip: Optional[str] = None,
     ) -> bool:
         try:
+            app_uuid = to_uuid(application_id)
             async with self.get_session() as session:
                 session.add(
                     AuditLogModel(
-                        application_id=application_id,
+                        application_id=app_uuid,
                         client_id=client_id,
                         agent=agent,
                         action=action,
@@ -169,10 +173,11 @@ class DatabaseClient:
         payload: Dict[str, Any],
     ) -> bool:
         try:
+            app_uuid = to_uuid(application_id)
             async with self.get_session() as session:
                 session.add(
                     ApplicationStateSnapshotModel(
-                        application_id=application_id,
+                        application_id=app_uuid,
                         client_id=client_id,
                         stage=stage,
                         payload=payload,
@@ -196,10 +201,11 @@ class DatabaseClient:
         payload: Dict[str, Any],
     ) -> bool:
         try:
+            app_uuid = to_uuid(application_id)
             async with self.get_session() as session:
                 session.add(
                     AgentHandoffModel(
-                        application_id=application_id,
+                        application_id=app_uuid,
                         client_id=client_id,
                         source_agent=source_agent,
                         target_agent=target_agent,
@@ -235,15 +241,16 @@ class DatabaseClient:
         processing_time_ms: Optional[float] = None,
     ) -> bool:
         try:
+            app_uuid = to_uuid(application_id)
             async with self.get_session() as session:
                 await session.execute(
                     sa.delete(ApplicationDecisionModel).where(
-                        ApplicationDecisionModel.application_id == application_id
+                        ApplicationDecisionModel.application_id == app_uuid
                     )
                 )
                 session.add(
                     ApplicationDecisionModel(
-                        application_id=application_id,
+                        application_id=app_uuid,
                         client_id=client_id,
                         decision=decision,
                         final_pd_score=final_pd_score,
@@ -265,9 +272,10 @@ class DatabaseClient:
 
     async def get_decision(self, application_id: str) -> Optional[Dict[str, Any]]:
         try:
+            app_uuid = to_uuid(application_id)
             async with self.get_session() as session:
                 stmt = sa.select(ApplicationDecisionModel).where(
-                    ApplicationDecisionModel.application_id == application_id
+                    ApplicationDecisionModel.application_id == app_uuid
                 )
                 result = await session.execute(stmt)
                 record = result.scalars().first()
@@ -322,20 +330,29 @@ class DatabaseClient:
         ttl_hours: int = 24,
     ) -> bool:
         try:
+            now = datetime.utcnow()
+            expires_at = now + timedelta(hours=ttl_hours)
             async with self.get_session() as session:
-                await session.execute(
-                    sa.delete(FeatureStoreModel).where(
-                        FeatureStoreModel.client_id == client_id
-                    )
-                )
-                session.add(
-                    FeatureStoreModel(
+                stmt = (
+                    pg_insert(FeatureStoreModel)
+                    .values(
                         client_id=client_id,
                         features=features,
+                        last_updated=now,
                         source=source,
-                        expires_at=datetime.utcnow() + timedelta(hours=ttl_hours),
+                        expires_at=expires_at,
+                    )
+                    .on_conflict_do_update(
+                        index_elements=[FeatureStoreModel.client_id],
+                        set_={
+                            "features": features,
+                            "last_updated": now,
+                            "source": source,
+                            "expires_at": expires_at,
+                        },
                     )
                 )
+                await session.execute(stmt)
                 await session.commit()
             logger.debug("[FeatureStore] Saved %s features for %s", len(features), client_id)
             return True

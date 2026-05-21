@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
-from openai import AzureOpenAI
+from openai import AzureOpenAI, BadRequestError as OpenAIBadRequestError
 from pydantic import BaseModel
 
 from src.agents.policy_agent.agent.prompts import DECISION_PROMPT_TEMPLATE, SYSTEM_PROMPT
@@ -361,6 +361,49 @@ class PolicyAgent:
         except Exception as exc:
             logger.warning("[POLICY] RAG unavailable — will use hard rules only: %s", exc)
 
+    def _create_chat_completion(
+        self,
+        *,
+        messages: List[Dict[str, str]],
+        temperature: float,
+        max_output_tokens: int,
+        response_format: Optional[Dict[str, str]] = None,
+    ) -> Any:
+        create_kwargs: Dict[str, Any] = {
+            "model": settings.azure_openai_deployment,
+            "messages": messages,
+            "temperature": temperature,
+        }
+        if response_format is not None:
+            create_kwargs["response_format"] = response_format
+
+        def _is_param_rejection(exc: Exception, param: str) -> bool:
+            msg = str(exc).lower()
+            return param.lower() in msg or "unsupported" in msg or "unrecognized" in msg or "unknown" in msg
+
+        # Attempt 1: max_completion_tokens (o-series / gpt-5+ models)
+        try:
+            return self._openai.chat.completions.create(
+                **create_kwargs,
+                max_completion_tokens=max_output_tokens,
+            )
+        except (TypeError, OpenAIBadRequestError) as exc:
+            if isinstance(exc, OpenAIBadRequestError) and not _is_param_rejection(exc, "max_completion_tokens"):
+                raise
+
+        # Attempt 2: max_tokens (gpt-3.5 / gpt-4 / older Azure deployments)
+        try:
+            return self._openai.chat.completions.create(
+                **create_kwargs,
+                max_tokens=max_output_tokens,
+            )
+        except (TypeError, OpenAIBadRequestError) as exc:
+            if isinstance(exc, OpenAIBadRequestError) and not _is_param_rejection(exc, "max_tokens"):
+                raise
+
+        # Attempt 3: no token limit — rely on model default
+        return self._openai.chat.completions.create(**create_kwargs)
+
     # ------------------------------------------------------------------
     # Public interface
     # ------------------------------------------------------------------
@@ -517,14 +560,13 @@ class PolicyAgent:
             tags=build_trace_tags("policy", "llm"),
         )
 
-        response = self._openai.chat.completions.create(
-            model=settings.azure_openai_deployment,
+        response = self._create_chat_completion(
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": prompt},
             ],
             temperature=0.1,
-            max_tokens=800,
+            max_output_tokens=800,
             response_format={"type": "json_object"},
         )
 

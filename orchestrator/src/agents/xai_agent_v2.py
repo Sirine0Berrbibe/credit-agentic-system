@@ -93,13 +93,6 @@ FEATURE_LABELS = {
     "DTI": "Ratio d'endettement",
     "PAYMENT_RATE": "Taux de paiement",
     
-    # Historique crédit
-    "BURO_DAYS_CREDIT_max": "Ancienneté du dernier crédit",
-    "BURO_DAYS_CREDIT_ENDDATE_max": "Temps jusqu'à fin du dernier crédit",
-    "BURO_CNT_CREDIT_PROLONG": "Nombre de crédits prolongés",
-    "PREV_CREDIT_GOODS_RATIO_std": "Variation du ratio crédit/bien",
-    "PREV_CREDIT_GOODS_RATIO_mean": "Ratio crédit/bien moyen",
-    
     # Localisation
     "REG_REGION_NOT_LIVE_REGION": "Changement de région",
     "REG_CITY_NOT_LIVE_CITY": "Changement de ville",
@@ -187,6 +180,63 @@ class CounterfactualGenerator:
     """
 
     DECISION_THRESHOLD = 0.5
+    NON_ACTIONABLE_PATTERNS = (
+        "age",
+        "âge",
+        "days_birth",
+        "naissance",
+        "marital",
+        "matrimonial",
+        "enfants",
+        "children",
+        "gouvernorat",
+        "governorate",
+        "études",
+        "education",
+        "logement",
+        "housing",
+    )
+
+    @classmethod
+    def _is_non_actionable(cls, feature_name: str, human_label: str) -> bool:
+        normalized = f"{feature_name} {human_label}".lower()
+        return any(pattern in normalized for pattern in cls.NON_ACTIONABLE_PATTERNS)
+
+    @classmethod
+    def _build_action(cls, feature_name: str, human_label: str) -> str:
+        normalized = f"{feature_name} {human_label}".lower()
+
+        if cls._is_non_actionable(feature_name, human_label):
+            return ""
+
+        if any(token in normalized for token in ("amt_credit", "montant", "amount")):
+            return "Réduire le montant demandé pour alléger le risque"
+
+        if any(token in normalized for token in ("annuity", "mensual", "monthly_payment", "monthly payment", "dti", "charge")):
+            return "Réduire vos charges mensuelles ou vos remboursements en cours"
+
+        if any(token in normalized for token in ("income", "revenu", "salaire", "salary")):
+            return "Mieux justifier des revenus réguliers ou augmenter votre revenu stable"
+
+        if any(token in normalized for token in ("duration", "term", "durée")):
+            return "Allonger légèrement la durée demandée pour réduire la mensualité"
+
+        if any(token in normalized for token in ("apport", "contribution", "down payment")):
+            return "Augmenter votre apport personnel"
+
+        if any(token in normalized for token in ("existing_credit", "credits en cours", "nombre de crédits")):
+            return "Réduire ou regrouper une partie de vos crédits en cours"
+
+        if any(token in normalized for token in ("contract", "emploi", "employed", "employer", "anciennet")):
+            return "Présenter une situation professionnelle plus stable ou une ancienneté mieux justifiée"
+
+        if any(token in normalized for token in ("realty", "real estate", "propriété", "garantie")):
+            return "Ajouter une garantie complémentaire ou un co-emprunteur solide"
+
+        if any(token in normalized for token in ("car", "vehicle", "véhicule")):
+            return "Renforcer le dossier avec une garantie complémentaire si disponible"
+
+        return ""
 
     @staticmethod
     def generate_counterfactuals(
@@ -201,7 +251,6 @@ class CounterfactualGenerator:
         """
 
         counterfactuals = []
-        distance_to_threshold = abs(pd_score - CounterfactualGenerator.DECISION_THRESHOLD)
 
         top_features = sorted(
             shap_values.items(),
@@ -209,52 +258,74 @@ class CounterfactualGenerator:
             reverse=True,
         )[:5]
 
-        for feature_name, shap_value in top_features:
+        # Qualitative change magnitude based on feature rank (avoids cross-unit math)
+        rank_to_pct = {0: 20, 1: 30, 2: 40, 3: 50, 4: 60}
+
+        for rank, (feature_name, shap_value) in enumerate(top_features):
             if shap_value == 0:
                 continue
 
-            # TRADUCTION: obtenir le label humain
             human_label = translate_feature_name(feature_name)
+            pct_change = rank_to_pct.get(rank, 60)
+            action = CounterfactualGenerator._build_action(feature_name, human_label)
+            if not action:
+                continue
 
-            # Calculer le changement nécessaire
-            if shap_value > 0:  # Augmente le risque → réduire
-                pct_change = (distance_to_threshold / abs(shap_value)) * 100
-                if pct_change < 5:
-                    pct_change = 5
-                if pct_change > 100:
-                    pct_change = 100
-
-                # Générer l'action en langage naturel
-                if "score" in human_label.lower():
-                    action = f"Améliorer votre {human_label} de {pct_change:.0f}%"
-                elif "revenu" in human_label.lower():
-                    action = f"Augmenter votre {human_label} de {pct_change:.0f}%"
+            if shap_value > 0:  # feature increases risk → reduce it
+                if "score" in human_label.lower() or "source" in human_label.lower():
+                    action = f"Améliorer votre {human_label} de {pct_change}%"
+                elif "revenu" in human_label.lower() or "salaire" in human_label.lower():
+                    action = f"Augmenter votre {human_label} de {pct_change}%"
                 else:
-                    action = f"Réduire votre {human_label} de {pct_change:.0f}%"
-            else:  # Réduit le risque → augmenter
-                pct_change = (distance_to_threshold / abs(shap_value)) * 100
-                if pct_change < 5:
-                    pct_change = 5
-                if pct_change > 100:
-                    pct_change = 100
-
-                if "score" in human_label.lower():
-                    action = f"Maintenir votre {human_label} à {pct_change:.0f}%"
+                    action = f"Réduire votre {human_label} de {pct_change}%"
+            else:  # feature reduces risk → maintain or increase it
+                if "score" in human_label.lower() or "source" in human_label.lower():
+                    action = f"Maintenir votre {human_label} à ce niveau"
                 else:
-                    action = f"Augmenter votre {human_label} de {pct_change:.0f}%"
+                    action = f"Augmenter votre {human_label} de {pct_change}%"
+
+            action = CounterfactualGenerator._build_action(feature_name, human_label)
+
+            if risk_band == "ELEVE":
+                impact = "APPROBATION"
+            elif risk_band == "MODERE":
+                impact = "MEILLEURE_SCORE"
+            else:
+                impact = "MAINTENIR"
 
             counterfactuals.append(
                 {
                     "technical_name": feature_name,
-                    "feature": human_label,  # LABEL HUMAIN
-                    "action": action,  # ACTION EN LANGAGE HUMAIN
-                    "impact": "APPROBATION" if risk_band == "ELEVE" else "MEILLEURE_SCORE",
+                    "feature": human_label,
+                    "action": action,
+                    "impact": impact,
                     "shap_contribution": float(shap_value),
                     "required_change_pct": pct_change,
                 }
             )
 
-        return counterfactuals[:5]
+        if not counterfactuals:
+            counterfactuals.append(
+                {
+                    "technical_name": "DOSSIER_GLOBAL",
+                    "feature": "Dossier global",
+                    "action": "Ajouter des justificatifs solides et réduire les engagements mensuels avant une nouvelle demande",
+                    "impact": "MEILLEURE_SCORE" if risk_band != "ELEVE" else "APPROBATION",
+                    "shap_contribution": 0.0,
+                    "required_change_pct": 0,
+                }
+            )
+
+        unique_actions = []
+        seen_actions = set()
+        for counterfactual in counterfactuals:
+            current_action = counterfactual.get("action", "")
+            if not current_action or current_action in seen_actions:
+                continue
+            seen_actions.add(current_action)
+            unique_actions.append(counterfactual)
+
+        return unique_actions[:5]
 
 
 class XAIAgent:
@@ -294,7 +365,7 @@ class XAIAgent:
             "[XAI_D] Starting (mode=%s) for application %s",
             xai_mode, state.get("application_id"),
         )
-        start_time = asyncio.get_event_loop().time()
+        start_time = asyncio.get_running_loop().time()
 
         try:
             shap_values = self._extract_shap_values(state.get("scoring_iterations", []))
@@ -311,8 +382,6 @@ class XAIAgent:
                 xai_result = await self._build_pro_result(state, shap_values, counterfactuals)
 
             state["xai_explanation"] = xai_result
-            state["xai_latency_ms"] = (asyncio.get_event_loop().time() - start_time) * 1000
-
             await self._write_to_audit_db(state, xai_result)
             state["audit_trail"].append({
                 "timestamp": datetime.utcnow().isoformat(),
@@ -325,11 +394,14 @@ class XAIAgent:
                 },
             })
             state["processing_steps_completed"].append("XAI_D_COMPLETE")
-            logger.info("[XAI_D] Done in %.1fms", state["xai_latency_ms"])
 
         except Exception as exc:
             logger.error("[XAI_D] Error: %s", exc)
             state["error_messages"].append(f"XAI error: {exc}")
+
+        finally:
+            state["xai_latency_ms"] = (asyncio.get_running_loop().time() - start_time) * 1000
+            logger.info("[XAI_D] Done in %.1fms", state["xai_latency_ms"])
 
         return state
 
@@ -494,7 +566,7 @@ N'utilise AUCUN terme technique. Écris en français tunisien accessible.
             for item in shap_values:
                 if isinstance(item, dict):
                     name = item.get("feature") or item.get("name")
-                    value = item.get("shap_value") or item.get("mean_abs_shap")
+                    value = item.get("shap_value") if item.get("shap_value") is not None else item.get("mean_abs_shap")
                     if name and value is not None:
                         shap_dict[name] = float(value)
             return shap_dict
@@ -538,10 +610,11 @@ N'utilise AUCUN terme technique. Écris en français tunisien accessible.
                 [cf["action"] + f" → {cf['impact']}" for cf in counterfactuals[:3]]
             )
 
+            decision_label = state.get("policy_decision", {}).get("decision") or state.get("final_decision") or "EN_COURS"
             prompt = f"""
             Vous êtes un expert en crédit très pédagogue. Expliquez simplement au client tunisien pourquoi sa demande a été REJETÉE ou APPROUVÉE.
-            
-            DECISION: {state['policy_decision']['decision']}
+
+            DECISION: {decision_label}
             Score de risque: {state['final_pd_score']:.1%}
             Niveau de confiance: {state['pd_confidence']:.0%}
             
@@ -574,48 +647,42 @@ N'utilise AUCUN terme technique. Écris en français tunisien accessible.
     ) -> str:
         """Fallback explanation with human-readable labels"""
 
-        decision = state["policy_decision"]["decision"]
-        
-        # Top feature avec label humain
-        top_feature_name, top_feature_value = max(
-            shap_values.items(), key=lambda x: abs(x[1])
+        decision = (
+            state.get("policy_decision", {}).get("decision")
+            or state.get("final_decision")
+            or "REVIEW_REQUIRED"
         )
-        top_feature_label = translate_feature_name(top_feature_name)
-        
-        # Meilleur contrefactuel
-        best_action = counterfactuals[0]["action"] if counterfactuals else "N/A"
+
+        if shap_values:
+            top_feature_name = max(shap_values, key=lambda k: abs(shap_values[k]))
+            top_feature_label = translate_feature_name(top_feature_name)
+        else:
+            top_feature_label = "votre profil financier"
+
+        best_action = counterfactuals[0]["action"] if counterfactuals else ""
 
         if decision == "APPROVE":
-            template = f"""
-            ✓ Excellente nouvelle! Votre demande de crédit a été APPROUVÉE! 🎉
-            
-            Votre profil de crédit est solide. Le facteur qui vous aide le plus: {top_feature_label}.
-            
-            Les conditions du crédit vous seront communiquées par SMS/email dans les 24 heures.
-            Bienvenue chez nous!
-            """
+            template = (
+                f"Votre demande de crédit a été approuvée. "
+                f"Votre profil de crédit est solide, notamment grâce à {top_feature_label}. "
+                f"Les conditions du crédit vous seront communiquées sous 24 heures."
+            )
         elif decision == "REJECT":
-            template = f"""
-            ✗ Malheureusement, votre demande de crédit a été REJETÉE.
-            
-            Le facteur principal: {top_feature_label} n'est pas optimal.
-            
-            ✓ Bonne nouvelle: vous pouvez améliorer votre dossier!
-            {best_action}
-            
-            Vous pourrez réappliquer dans 3 mois après amélioration.
-            """
+            action_text = f" {best_action}." if best_action else ""
+            template = (
+                f"Votre demande de crédit n'a pas pu être acceptée à ce stade. "
+                f"Le facteur principal identifié est {top_feature_label}."
+                f"{action_text} "
+                f"Vous pourrez repostuler dans 3 mois après amélioration de votre dossier."
+            )
         else:  # REVIEW_REQUIRED
-            template = f"""
-            ⚠️ Votre demande a été placée EN RÉVISION MANUELLE.
-            
-            Nous avons besoin d'examiner de plus près votre: {top_feature_label}.
-            
-            Un expert vous contactera dans 2 jours ouvrables.
-            Pendant ce temps, vous pouvez améliorer: {best_action}
-            """
+            template = (
+                f"Votre dossier a été transmis pour révision par un conseiller. "
+                f"Nous souhaitons examiner plus attentivement {top_feature_label}. "
+                f"Un expert vous contactera dans 2 jours ouvrables."
+            )
 
-        return template.strip()
+        return template
 
     async def _write_to_audit_db(
         self, state: CreditApplicationState, xai_result: XAIExplanationResult
@@ -627,20 +694,20 @@ N'utilise AUCUN terme technique. Écris en français tunisien accessible.
             return
 
         try:
-            audit_record = {
-                "application_id": state["application_id"],
-                "client_id": state["client_id"],
-                "agent": "XAI_D",
-                "timestamp": datetime.utcnow().isoformat(),
-                "decision": state["final_decision"],
-                "shap_values": json.dumps(xai_result["shap_values"]),
-                "top_factors": json.dumps(xai_result["top_factors"]),
-                "counterfactuals": json.dumps(xai_result["counterfactuals"]),
-                "natural_explanation": xai_result["natural_explanation"],
-                "distance_to_threshold": xai_result["distance_to_threshold"],
-            }
-
-            logger.info(f"[XAI_D] ✓ Wrote audit record")
+            await self.db_client.write_audit_log(
+                application_id=state["application_id"],
+                client_id=state["client_id"],
+                agent="XAI_D",
+                action="EXPLANATION_GENERATED",
+                details={
+                    "decision": state.get("final_decision"),
+                    "top_factors": xai_result.get("top_factors", []),
+                    "counterfactuals": xai_result.get("counterfactuals", []),
+                    "natural_explanation": xai_result.get("natural_explanation", ""),
+                    "distance_to_threshold": xai_result.get("distance_to_threshold"),
+                },
+            )
+            logger.info("[XAI_D] Audit record written to DB")
 
         except Exception as e:
-            logger.error(f"[XAI_D] Audit write failed: {e}")
+            logger.error("[XAI_D] Audit write failed: %s", e)

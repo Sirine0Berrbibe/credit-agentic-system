@@ -70,7 +70,7 @@ class FraudAnalysisResult(TypedDict):
     is_flagged: bool
     anomaly_type: Optional[str]
     velocity_metrics: Dict[str, int]
-    biometric_verified: bool
+    document_consistency_verified: bool
     interrupt_signal: bool
 
 

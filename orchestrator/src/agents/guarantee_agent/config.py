@@ -1,5 +1,6 @@
 from typing import Optional
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -16,6 +17,11 @@ class Settings(BaseSettings):
         case_sensitive=False,
         extra="ignore",
     )
+
+    @field_validator("azure_openai_endpoint", mode="before")
+    @classmethod
+    def strip_trailing_slash(cls, v: Optional[str]) -> Optional[str]:
+        return v.rstrip("/") if v else v
 
 
 settings = Settings()
